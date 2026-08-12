@@ -72,6 +72,72 @@ export function matchCorrinPortraitFiles(gender: 'M' | 'F', height: 'short' | 't
   return matchByStem(files, entries, keyFor)
 }
 
+const SKILL_IDS = new Set(skills.map((s) => s.id))
+const ADULT_NAMES = new Map(
+  characters.filter((c) => !c.isChild && c.id !== 'corrin_m' && c.id !== 'corrin_f').map((c) => [c.id, c.name]),
+)
+const CHILD_IDS = new Set(characters.filter((c) => c.isChild).map((c) => c.id))
+const CORRIN_BODY_KEYS = new Set(['m_short', 'm_tall', 'f_short', 'f_tall'])
+const HAIRSTYLE_IDS = new Set(CORRIN_HAIRSTYLES.map((h) => h.id))
+
+/**
+ * Routes a whole folder's worth of files (e.g. an entire `public/` backup selected at once) by
+ * their PATH, not just filename — needed because child/Corrin filenames ("base.png") repeat across
+ * every character/variant and are only disambiguated by which folder they're actually in. Looks for
+ * known marker segments ("skills", "adults", "children", "corrin") anywhere in the path rather than
+ * requiring an exact prefix, so it doesn't matter what the user's top-level folder happens to be
+ * named (their Drive backup, an extracted zip, whatever) — only the structure below that matters.
+ * Files with no path info at all (a plain multi-file selection, not a folder) still work via
+ * filename alone for skills/adults; children/Corrin can't be disambiguated that way and land in
+ * `unmatched` instead, same as an actually-unrecognized file would.
+ */
+export function matchFilesByPath(files: File[]): MatchResult {
+  const matched: MatchedFile[] = []
+  const unmatched: File[] = []
+
+  for (const file of files) {
+    const rawPath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
+    const parts = rawPath.replace(/\\/g, '/').toLowerCase().split('/')
+    const stemName = (parts[parts.length - 1] ?? '').replace(/\.[^.]+$/, '')
+
+    if (parts.includes('skills') && SKILL_IDS.has(stemName)) {
+      matched.push({ file, key: assetKeys.skillIcon(stemName), label: stemName })
+      continue
+    }
+    if (parts.includes('adults') && ADULT_NAMES.has(stemName)) {
+      matched.push({ file, key: assetKeys.portrait(stemName), label: ADULT_NAMES.get(stemName)! })
+      continue
+    }
+    const childrenIdx = parts.indexOf('children')
+    const childId = childrenIdx !== -1 ? parts[childrenIdx + 1] : undefined
+    if (childId && CHILD_IDS.has(childId)) {
+      if (stemName === 'base') {
+        matched.push({ file, key: assetKeys.childPortraitBase(childId), label: `${childId} — base` })
+        continue
+      }
+      if (stemName === 'raw') {
+        matched.push({ file, key: assetKeys.childPortraitRaw(childId), label: `${childId} — raw` })
+        continue
+      }
+    }
+    const corrinIdx = parts.indexOf('corrin')
+    const bodyKey = corrinIdx !== -1 ? parts[corrinIdx + 1] : undefined
+    if (bodyKey && CORRIN_BODY_KEYS.has(bodyKey)) {
+      if (stemName === 'base') {
+        matched.push({ file, key: assetKeys.corrinBase(bodyKey), label: `${bodyKey} — base` })
+        continue
+      }
+      if (HAIRSTYLE_IDS.has(stemName)) {
+        matched.push({ file, key: assetKeys.corrinHairRaw(bodyKey, stemName), label: `${bodyKey} — ${stemName}` })
+        continue
+      }
+    }
+    unmatched.push(file)
+  }
+
+  return { matched, unmatched }
+}
+
 /** Writes every matched file to IndexedDB, calling onProgress after each one (bulk sets can be 200+
  * files — a progress callback lets the UI show something better than a frozen "please wait"). */
 export async function storeMatchedFiles(matched: MatchedFile[], onProgress?: (done: number, total: number) => void): Promise<void> {

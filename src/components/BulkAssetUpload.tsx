@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { characters } from '../data/characters'
 import {
   matchAdultPortraitFiles,
   matchChildPortraitFiles,
   matchCorrinPortraitFiles,
+  matchFilesByPath,
   matchSkillFiles,
   storeMatchedFiles,
   type MatchResult,
@@ -28,15 +29,26 @@ function UploadSection({
   title,
   hint,
   match,
+  directory,
 }: {
   title: string
   hint: string
   match: (files: File[]) => MatchResult
+  /** Lets the input accept a whole folder in one pick instead of individual files — `webkitdirectory`
+   * has no typed JSX prop (it's non-standard), so it's set imperatively via ref instead. Chrome/Edge/
+   * Firefox desktop and Android Chrome support it; iOS Safari doesn't reliably, which is exactly why
+   * the plain multi-file sections below still exist as a fallback. */
+  directory?: boolean
 }) {
   const [result, setResult] = useState<MatchResult | null>(null)
   const [status, setStatus] = useState<'idle' | 'uploading' | 'done'>('idle')
   const [progress, setProgress] = useState({ done: 0, total: 0 })
   const bumpAssetEpoch = useEditSessionStore((state) => state.bumpAssetEpoch)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (directory) inputRef.current?.setAttribute('webkitdirectory', '')
+  }, [directory])
 
   function handleFiles(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? [])
@@ -60,6 +72,7 @@ function UploadSection({
       <h4 className="text-sm font-semibold text-neutral-200">{title}</h4>
       <p className="text-xs text-neutral-500">{hint}</p>
       <input
+        ref={inputRef}
         type="file"
         accept="image/png"
         multiple
@@ -107,9 +120,18 @@ export function BulkAssetUpload({ onClose }: { onClose: () => void }) {
           </button>
         </div>
         <p className="text-xs text-neutral-500">
-          Select multiple image files at once (e.g. everything in your <code>public/skills/</code> backup folder) —
-          they're matched by filename and stored on this device only, same as Edit Mode's single-icon uploads.
+          Everything's matched automatically and stored on this device only, same as Edit Mode's
+          single-icon uploads — nothing is sent anywhere.
         </p>
+
+        <UploadSection
+          title="Select an entire folder"
+          hint='Pick your whole "public" backup folder (or just "art" or "skills") in one go — every skill icon, adult portrait, child, and Corrin file inside gets sorted and matched automatically by its path. Best option when your browser supports it (desktop Chrome/Edge/Firefox, Android Chrome); not reliable on iOS Safari — use the sections below there instead.'
+          match={matchFilesByPath}
+          directory
+        />
+
+        <p className="text-center text-xs text-neutral-600">— or, upload by category —</p>
 
         <UploadSection
           title="Skill icons"
