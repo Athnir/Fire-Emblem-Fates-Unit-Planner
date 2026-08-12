@@ -1,32 +1,54 @@
-# React + TypeScript + Vite
+# Fates Unit Planner
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+A Fire Emblem Fates marriage, pair-up, class/skill build, and inheritance planner. Plan out
+parent pairings, see which children result and what they inherit, project a unit's stats through
+promotions and multi-classing, and build out skill loadouts — all client-side, nothing leaves your
+device.
 
-Currently, two official plugins are available:
+**Live app:** https://athnir.github.io/Fire-Emblem-Fates-Unit-Planner/
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Installing
 
-## React Compiler
+The live link above is a Progressive Web App (PWA) — it installs like a native app on every
+platform below, straight from the browser, no app store needed. Same app either way; installing
+just gets it its own window/icon and offline access instead of living in a browser tab.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### Windows
+Open the link in **Chrome** or **Edge** → click the **install icon** (a monitor with a down arrow)
+at the right side of the address bar → **Install**.
 
-## Expanding the Oxlint configuration
+### Mac
+Open the link in **Chrome** → same install icon in the address bar → **Install**.
+(Safari on recent macOS versions also supports this via **File → Add to Dock**.)
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+### Linux
+Open the link in **Chrome** or another Chromium-based browser → same install icon in the address
+bar → **Install**.
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+### Android
+Open the link in **Chrome** → tap the **⋮ menu** → **Install app** (or **Add to Home screen**,
+depending on Chrome version).
+
+### iPhone / iPad
+Open the link in **Safari** specifically (this only works in Safari, not Chrome/Firefox on iOS) →
+tap the **Share** button → **Add to Home Screen**. Installing this way (rather than just using it
+in a regular Safari tab) also makes iOS much less likely to clear your saved plans over time.
+
+Regardless of platform, use the **Export Backup** button (top of the app) any time you want a
+downloadable copy of everything you've saved — it's the one guaranteed way to not lose progress no
+matter what the browser does with its storage.
+
+## Development
+
+```bash
+npm install
+npm run dev        # start the dev server
+npm run test        # run the test suite
+npm run build        # production build (web)
+npm run dist:win     # build the Windows portable .exe
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+The copyrighted game-extracted art and skill icons (`public/art/`, `public/skills/`) are
+intentionally excluded from this repo — see [ART_ASSETS.md](ART_ASSETS.md) for how they're
+extracted, and drop your own copies back into `public/` to restore real portraits/icons locally
+(the app falls back to placeholder silhouettes/icons without them).

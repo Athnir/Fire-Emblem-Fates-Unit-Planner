@@ -21,9 +21,10 @@ function keyFor(type: AssetIconType, iconId: string): string {
 // Pre-extracted-from-the-game icons live as static files under public/skills/ (see
 // scripts/import_skill_icons.py) — git-ignored, same as public/art/, since they're copyrighted
 // game assets. Only skills have a batch pipeline so far; weapons still rely entirely on manual
-// Edit Mode uploads.
+// Edit Mode uploads. Prefixed with BASE_URL rather than a hardcoded leading slash — see the same
+// comment in src/data/portraitAssets.ts for why (GitHub Pages sub-path deployment).
 function staticUrlFor(type: AssetIconType, iconId: string): string | undefined {
-  return type === 'skill' ? `/skills/${iconId}.png` : undefined
+  return type === 'skill' ? `${import.meta.env.BASE_URL}skills/${iconId}.png` : undefined
 }
 
 /**

@@ -4,7 +4,14 @@ import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(() => ({
+  // GitHub Pages serves this project at a sub-path (github.io/<repo-name>/), not the domain root, so
+  // every asset reference needs that prefix — but ONLY for that specific deploy target. Gated behind
+  // an explicit env var (set by .github/workflows/deploy-pages.yml) rather than just "is this a
+  // production build", because `npm run dist:win` ALSO runs `vite build` under the hood, and the
+  // Electron app's own local static server (electron/main.cjs) serves dist/ at its own root — it
+  // would 404 every asset if this same sub-path prefix leaked into that build too.
+  base: process.env.GITHUB_PAGES ? '/Fire-Emblem-Fates-Unit-Planner/' : '/',
   // host: true binds the dev server to all network interfaces (not just localhost) so it's
   // reachable from a phone on the same Wi-Fi/LAN for mobile testing. allowedHosts lists the
   // Tailscale MagicDNS hostname too — Vite blocks any Host header it doesn't recognize by
@@ -47,13 +54,17 @@ export default defineConfig({
         theme_color: '#7c3aed',
         background_color: '#16171d',
         display: 'standalone',
+        // Relative (no leading slash) rather than root-absolute — a web app manifest resolves
+        // relative URLs against the manifest file's OWN location, which already sits at whatever
+        // the configured base is (domain root normally, a sub-path on GitHub Pages), so this way
+        // the icons resolve correctly either way without needing to know `base` here too.
         icons: [
-          { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
-          { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
-          { src: '/icons/icon-maskable-192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
-          { src: '/icons/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+          { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          { src: 'icons/icon-maskable-192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
+          { src: 'icons/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
       },
     }),
   ],
-})
+}))
