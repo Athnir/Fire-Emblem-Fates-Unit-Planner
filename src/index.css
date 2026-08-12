@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+html, body {
+  background-color: #0a0a0a;
+  overflow-x: hidden;
+}
+
+/* Route-themed background (RouteBackground.tsx): React updates these elements' color attributes in
+   place on route change (same SVG structure every time, just different fill/stroke/stop-color), so
+   a plain CSS transition on those properties turns that into a smooth 1s cross-fade instead of an
+   instant snap. */
+.route-bg stop,
+.route-bg ellipse,
+.route-bg circle,
+.route-bg g {
+  transition: fill 1000ms ease, stroke 1000ms ease, stop-color 1000ms ease;
+}
+
+/* Covers the case a plain color transition can't: when a route change swaps the edge-strip flower
+   shape itself (e.g. Birthright's blossom to Conquest's rose), RouteBackground.tsx remounts that
+   group under a fresh key rather than reusing the old DOM nodes — there's no way to interpolate
+   between different element types/counts via CSS attribute transitions. This animation just fades
+   the freshly-mounted shape in instead of letting it pop in fully opaque immediately. */
+@keyframes route-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.route-fade-in {
+  animation: route-fade-in 700ms ease;
+}
+
+@layer base {
+  /* Native <select> rendering (appearance: auto) doesn't reliably respect our custom padding for
+     internal text positioning, making the label sit low/clipped in the box. Switching to a plain
+     CSS box model fixes that; the background-image replaces the native dropdown arrow we lose. */
+  select {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23a1a1aa' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 8l4 4 4-4'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.5rem center;
+    background-size: 1em 1em;
+  }
+}

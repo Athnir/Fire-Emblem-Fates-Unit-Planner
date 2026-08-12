@@ -1,0 +1,36 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# electron-builder output (the packaged .exe and its unpacked folder) — large binaries, not source,
+# regenerated any time with `npm run dist:win`.
+release
+
+# Copyrighted character art — see ART_ASSETS.md. Kept out of the repo entirely; drop the whole
+# public/art/ folder back in locally to restore portraits, or delete it before sharing/pushing.
+public/art/
+
+# Copyrighted skill/item icons extracted from the game's own Icon.bch — same reasoning as
+# public/art/ above. See scripts/import_skill_icons.py.
+public/skills/
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
