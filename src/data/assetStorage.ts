@@ -95,6 +95,15 @@ export function fileToDataUrl(file: File): Promise<string> {
 export const assetKeys = {
   skillIcon: (skillId: string) => `icon:skill:${skillId}`,
   weaponIcon: (weaponId: string) => `icon:weapon:${weaponId}`,
+  /** Plain adult portrait (single static image — their hair never changes). */
   portrait: (characterId: string) => `portrait:${characterId}`,
   hairReference: (characterId: string) => `hair-reference:${characterId}`,
+  /** Child's face/armor/body layer (hair region cut transparent) — see ART_ASSETS.md. */
+  childPortraitBase: (childId: string) => `portrait:child-base:${childId}`,
+  /** Child's raw, already-colored hair texture, recolored live from a hex — see portraitColorize.ts. */
+  childPortraitRaw: (childId: string) => `portrait:child-raw:${childId}`,
+  /** Corrin's bald body render for one gender+height body variant. */
+  corrinBase: (bodyKey: string) => `portrait:corrin-base:${bodyKey}`,
+  /** Corrin's raw hair texture for one body variant + hairstyle, recolored the same way as a child's. */
+  corrinHairRaw: (bodyKey: string, hairstyleId: string) => `portrait:corrin-hair-raw:${bodyKey}:${hairstyleId}`,
 }

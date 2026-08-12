@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { BackupControls } from './components/BackupControls'
+import { BulkAssetUpload } from './components/BulkAssetUpload'
 import { CorrinBuildPanel } from './components/CorrinBuildPanel'
 import { EditModeToggle } from './components/EditModeToggle'
 import { ExportImageButton } from './components/ExportImageButton'
@@ -18,6 +19,7 @@ function App() {
   const editModeEnabled = usePlannerStore((state) => state.editModeEnabled)
   const activeRoute = usePlannerStore((state) => state.activeRoute)
   const mainRef = useRef<HTMLElement>(null)
+  const [bulkUploadOpen, setBulkUploadOpen] = useState(false)
 
   useEffect(() => {
     // Best-effort request not to have this site's storage evicted under disk pressure — Chrome
@@ -41,6 +43,15 @@ function App() {
             <ExportImageButton targetRef={mainRef} tab={tab} />
             <BackupControls />
             <EditModeToggle />
+            {editModeEnabled && (
+              <button
+                type="button"
+                onClick={() => setBulkUploadOpen(true)}
+                className="rounded-md bg-neutral-800 px-3 py-1.5 text-sm font-medium text-neutral-300 hover:bg-neutral-700"
+              >
+                Bulk Upload
+              </button>
+            )}
           </div>
         </div>
         <nav className="mt-3 flex gap-2">
@@ -89,6 +100,8 @@ function App() {
       </header>
 
       <CorrinBuildPanel />
+
+      {bulkUploadOpen && <BulkAssetUpload onClose={() => setBulkUploadOpen(false)} />}
 
       <main ref={mainRef} className="p-6">
         {tab === 'roster' && <RosterBrowser />}

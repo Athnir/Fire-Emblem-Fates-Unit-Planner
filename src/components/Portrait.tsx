@@ -1,12 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
+import { assetKeys, getAsset } from '../data/assetStorage'
 import {
   adultPortraitUrl,
   childPortraitBaseUrl,
   childPortraitRawUrl,
   corrinBaseUrl,
+  corrinBodyKey,
   corrinHairRawUrl,
 } from '../data/portraitAssets'
 import { colorizeRawHairTexture, loadImage } from '../logic/portraitColorize'
+import { useEditSessionStore } from '../state/editSessionStore'
+
+/** IndexedDB (Edit Mode / Bulk Upload) takes priority over the static public/art/ file, same
+ * fallback order AssetIcon uses for skill/weapon icons — lets someone without the (git-ignored,
+ * copyrighted) art folder built into their deployment supply portraits client-side instead. */
+async function resolveUrl(key: string, staticUrl: string): Promise<string> {
+  return (await getAsset(key)) ?? staticUrl
+}
 
 interface CorrinAppearanceProps {
   gender: 'M' | 'F'
@@ -46,15 +56,28 @@ export function Portrait({ characterId, isChild, hairHex, size = 96, corrin }: P
   const [status, setStatus] = useState<Status>('loading')
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [adultUrl] = useState(() => adultPortraitUrl(characterId))
+  // The actual <img src> to render — separate from adultUrl (the static fallback) because the real
+  // source might be an IndexedDB data: URL instead, resolved async in the effect below. Rendering
+  // adultUrl directly here would always show the static file/placeholder, silently ignoring
+  // anything uploaded via Edit Mode/Bulk Upload.
+  const [resolvedAdultUrl, setResolvedAdultUrl] = useState(adultUrl)
   const isComposite = isChild || !!corrin
+  // Bumped whenever Edit Mode discards a session's changes — same signal AssetIcon reacts to, so a
+  // bulk-uploaded (or reverted) portrait is picked up without a full page reload.
+  const assetEpoch = useEditSessionStore((state) => state.assetEpoch)
 
   useEffect(() => {
     let cancelled = false
     setStatus('loading')
 
     if (!isComposite) {
-      loadImage(adultUrl)
-        .then(() => !cancelled && setStatus('ok'))
+      resolveUrl(assetKeys.portrait(characterId), adultUrl)
+        .then((url) => loadImage(url).then(() => url))
+        .then((url) => {
+          if (cancelled) return
+          setResolvedAdultUrl(url)
+          setStatus('ok')
+        })
         .catch(() => !cancelled && setStatus('missing'))
       return () => {
         cancelled = true
@@ -67,8 +90,9 @@ export function Portrait({ characterId, isChild, hairHex, size = 96, corrin }: P
       // base.png is required; the hair layer is optional — some children (e.g. Shigure, whose hair
       // is always his fixed mother's regardless of pairing) only ever get a flat render since the
       // game itself never gives them a separately-tintable hair layer either.
-      const baseUrl = corrin ? corrinBaseUrl(corrin.gender, corrin.height) : childPortraitBaseUrl(characterId)
-      const baseImg = await loadImage(baseUrl)
+      const baseKey = corrin ? assetKeys.corrinBase(corrinBodyKey(corrin.gender, corrin.height)) : assetKeys.childPortraitBase(characterId)
+      const baseStaticUrl = corrin ? corrinBaseUrl(corrin.gender, corrin.height) : childPortraitBaseUrl(characterId)
+      const baseImg = await resolveUrl(baseKey, baseStaticUrl).then((url) => loadImage(url))
       if (cancelled) return
 
       // Render the visible canvas's backing store at devicePixelRatio, not the art's native
@@ -87,10 +111,15 @@ export function Portrait({ characterId, isChild, hairHex, size = 96, corrin }: P
       // few RGB units with zero per-character tuning. Every child and every Corrin hairstyle now
       // has an identity-verified raw texture (confirmed via exact pixel-mask IoU against the
       // formerly-used HSL template before switching), so this is the only hair path left.
-      const rawUrl = corrin
+      const rawKey = corrin
+        ? assetKeys.corrinHairRaw(corrinBodyKey(corrin.gender, corrin.height), corrin.hairstyle)
+        : assetKeys.childPortraitRaw(characterId)
+      const rawStaticUrl = corrin
         ? corrinHairRawUrl(corrin.gender, corrin.height, corrin.hairstyle)
         : childPortraitRawUrl(characterId)
-      const rawImg = await loadImage(rawUrl).catch(() => undefined)
+      const rawImg = await resolveUrl(rawKey, rawStaticUrl)
+        .then((url) => loadImage(url))
+        .catch(() => undefined)
       if (cancelled || !rawImg) return
 
       const off = document.createElement('canvas')
@@ -114,7 +143,7 @@ export function Portrait({ characterId, isChild, hairHex, size = 96, corrin }: P
     return () => {
       cancelled = true
     }
-  }, [characterId, isChild, adultUrl, hairHex, isComposite, corrin?.gender, corrin?.height, corrin?.hairstyle])
+  }, [characterId, isChild, adultUrl, hairHex, isComposite, corrin?.gender, corrin?.height, corrin?.hairstyle, assetEpoch])
 
   return (
     <div
@@ -124,7 +153,7 @@ export function Portrait({ characterId, isChild, hairHex, size = 96, corrin }: P
       {status === 'missing' && <Placeholder size={size} />}
       {!isComposite ? (
         <img
-          src={adultUrl}
+          src={resolvedAdultUrl}
           alt=""
           className={`h-full w-full object-cover ${status === 'ok' ? '' : 'hidden'}`}
           style={{ display: status === 'ok' ? undefined : 'none' }}

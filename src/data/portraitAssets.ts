@@ -29,7 +29,7 @@ export function childPortraitRawUrl(childId: string): string {
 type CorrinGender = 'M' | 'F'
 type CorrinHeight = 'short' | 'tall'
 
-function corrinBodyKey(gender: CorrinGender, height: CorrinHeight): string {
+export function corrinBodyKey(gender: CorrinGender, height: CorrinHeight): string {
   return `${gender.toLowerCase()}_${height}`
 }
 

@@ -38,6 +38,14 @@ Regardless of platform, use the **Export Backup** button (top of the app) any ti
 downloadable copy of everything you've saved — it's the one guaranteed way to not lose progress no
 matter what the browser does with its storage.
 
+### Restoring real portraits/icons (any platform, including mobile)
+The live deployment above doesn't include the real, copyrighted game portraits/skill icons (see
+"Development" below for why) — you'll see placeholder silhouettes/icons everywhere until you supply
+your own. To fix that from any device, no source checkout needed: toggle **Edit Mode** (top of the
+app) → **Bulk Upload** → select a batch of image files at once (matched automatically by filename)
+for skill icons, adult portraits, or a specific child/Corrin body variant. Everything's stored on
+that device only, in the browser's own local storage — nothing uploads anywhere.
+
 ## Development
 
 ```bash

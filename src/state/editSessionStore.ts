@@ -10,11 +10,15 @@ import { create } from 'zustand'
  */
 interface EditSessionState {
   revertFns: Record<string, () => Promise<void> | void>
-  /** Bumped after a discard so every AssetIcon/hair-palette reader re-fetches from storage. */
+  /** Bumped after a discard (or a bulk upload) so every AssetIcon/Portrait/hair-palette reader
+   * re-fetches from storage without needing a manual page reload. */
   assetEpoch: number
   recordChange: (key: string, revert: () => Promise<void> | void) => void
   discardAll: () => Promise<void>
   clearSession: () => void
+  /** Same re-fetch signal discardAll sends, without reverting anything — for actions (like Bulk
+   * Upload) that commit new data directly rather than rolling back to a prior state. */
+  bumpAssetEpoch: () => void
 }
 
 export const useEditSessionStore = create<EditSessionState>((set, get) => ({
@@ -30,4 +34,5 @@ export const useEditSessionStore = create<EditSessionState>((set, get) => ({
     set((state) => ({ revertFns: {}, assetEpoch: state.assetEpoch + 1 }))
   },
   clearSession: () => set({ revertFns: {} }),
+  bumpAssetEpoch: () => set((state) => ({ assetEpoch: state.assetEpoch + 1 })),
 }))
