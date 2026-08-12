@@ -74,7 +74,13 @@ function UploadSection({
       <input
         ref={inputRef}
         type="file"
-        accept="image/png"
+        // No `accept` filter — the matching logic (matchFilesByPath/matchSkillFiles/etc.) already
+        // correctly ignores anything irrelevant (confirmed: .svg, .md, and legacy template.png files
+        // all land in "unmatched" on their own). A strict accept="image/png" caused a real bug on
+        // Android specifically: its folder picker rejects the whole selection with "file type not
+        // supported" when a picked folder contains any non-matching file (icons.svg, the README),
+        // since folder-select and a MIME-type filter don't really make sense together in the first
+        // place — the filter was redundant safety that was actively breaking things.
         multiple
         onChange={handleFiles}
         className="block w-full text-sm text-neutral-300 file:mr-3 file:rounded-md file:border-0 file:bg-neutral-800 file:px-3 file:py-1.5 file:text-neutral-200"
