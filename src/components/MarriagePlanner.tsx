@@ -125,8 +125,7 @@ export function MarriagePlanner() {
           <div className="space-y-3">
             {familyBlocked && (
               <p className="text-sm text-red-400">
-                {primary.name} and {spouse.name} are related given this plan's pairings (parent/child
-                or siblings) — marriage is blocked, though they can still reach A-rank/friendship support.
+                {primary.name} and {spouse.name} are related (parent/child or siblings) — marriage is blocked.
               </p>
             )}
             {!familyBlocked && !eligible && (
@@ -142,8 +141,8 @@ export function MarriagePlanner() {
             )}
             {(alreadyAssignedPrimary || alreadyAssignedSpouse) && (
               <p className="text-sm text-amber-400">
-                {alreadyAssignedPrimary ? primary.name : spouse.name} is already assigned to another pairing
-                in this plan — adding this one will double-book them.
+                {alreadyAssignedPrimary ? primary.name : spouse.name} is already assigned to another pairing in
+                this plan.
               </p>
             )}
 

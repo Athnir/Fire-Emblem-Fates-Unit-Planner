@@ -3,7 +3,7 @@ import { characters, charactersById } from '../data/characters'
 import { classes as allClasses } from '../data/classes'
 import { skills, skillsById } from '../data/skills'
 import { supports } from '../data/supports'
-import type { ClassData, Gender, Skill } from '../data/types'
+import type { Character, ClassData, Gender, Skill } from '../data/types'
 import {
   classSkillsForGender,
   gen1UnreachableSkillIds,
@@ -20,11 +20,11 @@ import { withCorrinBuild } from '../logic/corrinBuild'
 import { canFriendshipSeal, canMarry, canProduceChild, isRouteCompatible } from '../logic/eligibility'
 import { useCorrinBuildStore } from '../state/corrinBuildStore'
 import { usePlannerStore } from '../state/plannerStore'
-import type { SavedBuild } from '../state/savedBuildsStore'
+import type { WorkingSetEntry } from '../state/savedBuildsStore'
 import { useScreenshotContextStore } from '../state/screenshotContextStore'
 import { AssetIcon } from './AssetIcon'
+import { BuildSetManager } from './BuildSetManager'
 import { RouteFilter } from './RouteFilter'
-import { SavedBuildsManager } from './SavedBuildsManager'
 
 const MAX_LOADOUT = 5
 
@@ -119,6 +119,7 @@ function ClassSkillRow({
 
 export function SkillPlanner() {
   const activeRoute = usePlannerStore((state) => state.activeRoute)
+  const setActiveRoute = usePlannerStore((state) => state.setActiveRoute)
   const pairings = usePlannerStore((state) => state.pairings)
   const corrinBuild = useCorrinBuildStore((state) => state.build)
   const [characterId, setCharacterId] = useState('')
@@ -136,6 +137,18 @@ export function SkillPlanner() {
     [activeRoute],
   )
 
+  // Switching routes can leave a unit selected that doesn't exist on the new one (e.g. picking Leo
+  // on Conquest, then switching to Birthright without picking a new unit first) — the dropdown
+  // itself would still show him and the Build Set panel below would happily let you add him to
+  // Birthright's bucket, which should be impossible. Clearing the pick (and everything derived
+  // from it, via the same reset handleCharacterChange already uses) whenever it falls outside the
+  // new route's roster closes that gap.
+  useEffect(() => {
+    if (characterId && !participants.some((c) => c.id === characterId)) {
+      handleCharacterChange('')
+    }
+  }, [characterId, participants])
+
   const character = characterId ? withCorrinBuild(charactersById[characterId], corrinBuild) : undefined
 
   const setUnitLabel = useScreenshotContextStore((state) => state.setUnitLabel)
@@ -144,23 +157,80 @@ export function SkillPlanner() {
     return () => setUnitLabel('')
   }, [character, setUnitLabel])
 
-  // Partner Seal is a real marriage, so family-blocked candidates (per the current plan) are
-  // excluded here — but NOT from Friend/Friendship Seal below, since siblings can still support.
+  // Children's class tree isn't their own Class Set at all — it's their own primary line plus
+  // whatever their fixed parent (father, for most; mother for a few, e.g. Midori) and variable
+  // parent (whoever the fixed parent marries) each contribute, per the same inheritance rules the
+  // Unit Planner tab already uses (see childCalculator.ts's fixedParentContribution/inheritClasses).
+  // Hoisted above wifeOptions below since it also needs fixedChar/variableChar, to catch a sibling
+  // relationship this preview's own hypothetical parent picks reveal (see wifeOptions' comment).
+  const fixedInfo = useMemo(() => (character?.isChild ? getFixedParent(character) : undefined), [character])
+  const variableCandidates = useMemo(() => {
+    if (!fixedInfo) return []
+    const fixedC = charactersById[fixedInfo.id]
+    if (!fixedC) return []
+    const isKana = character?.id === 'kana_m' || character?.id === 'kana_f'
+    return characters.filter((c) => {
+      if ((c.isChild && !isKana) || c.id === fixedC.id) return false
+      const father = fixedInfo.side === 'father' ? fixedC : c
+      const mother = fixedInfo.side === 'father' ? c : fixedC
+      return canProduceChild(supports, father, mother, activeRoute)
+    })
+  }, [fixedInfo, character, activeRoute])
+  const fixedChar = fixedInfo ? withCorrinBuild(charactersById[fixedInfo.id], corrinBuild) : undefined
+  const variableChar = variableParentId ? withCorrinBuild(charactersById[variableParentId], corrinBuild) : undefined
+
+  // Only relevant once THIS preview's own Variable parent picker has an actual selection (no pick
+  // yet -> no adjustment, normal lists apply): does that parent already have a different assigned
+  // child of their own (their fixed side elsewhere, e.g. Subaki -> Caeldori)? Some parents have no
+  // assigned child at all (Anna, Fuga, ...) and never trigger this. When one does, that child
+  // becomes a half-sibling of `character` in this preview — incest, so per the game's actual rule
+  // their support is REPLACED entirely with a plain A-rank-only one, regardless of whatever they'd
+  // normally have had (S here, since only Kana/Shigure ever have real Marriage prospects among
+  // children to begin with): removed from the S-rank Marriage pool below even where they'd
+  // otherwise qualify. That replacement A-rank relationship is never Friendship-Seal-eligible
+  // though (A+ requires a real same-sex support pair, which this manufactured one isn't) — the
+  // Unit Planner's separate Pair Up mechanics section is where the plain-A side of this shows up
+  // (see MechanicsSection's partnerOptions there), not here. Checked against the Variable parent
+  // they've actually got selected right now — not the real committed plan (see isFamilyBlocked
+  // below for that), and not merely the fixed side either, since a fixed parent (Shigure's mother is
+  // always Azura, no ambiguity) never has more than the one child already accounted for.
+  const variableParentOtherChild = variableChar
+    ? characters.find(
+        (c) => c.isChild && c.id !== character?.id && isRouteCompatible(c.route, activeRoute) && getFixedParent(c)?.id === variableChar.id,
+      )
+    : undefined
+  // The Variable parent themselves is just as family-blocked as their other child — a parent can't
+  // marry their own kid either. Usually a no-op here (a normal adult like Subaki was never a
+  // marriage candidate for their kid to begin with), but matters for the one real exception: Corrin
+  // CAN normally marry a non-Kana child (e.g. Shigure), so if Corrin is chosen as that child's
+  // Variable parent, their otherwise-real S-rank eligibility needs excluding same as the sibling's.
+  const familyOverrideIds = [variableChar?.id, variableParentOtherChild?.id].filter(
+    (id): id is string => Boolean(id),
+  )
+
+  // Partner Seal is a real marriage, so family-blocked candidates are excluded here — but NOT from
+  // Friend/Friendship Seal below, since siblings can still support (no incest, but no such
+  // restriction on plain friendship). isFamilyBlocked catches a real conflict already committed in
+  // the Marriage Planner's plan; familyOverrideIds catches one this preview's own Variable parent
+  // pick reveals, even with nothing committed to the plan yet (see its comment above).
   const wifeOptions = useMemo(() => {
     if (!character) return []
     return participants.filter(
       (c) =>
         c.id !== character.id &&
         canMarry(supports, character, c, activeRoute) &&
-        !isFamilyBlocked(character, c, pairings),
+        !isFamilyBlocked(character, c, pairings) &&
+        !familyOverrideIds.includes(c.id),
     )
-  }, [character, participants, activeRoute, pairings])
+  }, [character, participants, activeRoute, pairings, familyOverrideIds])
 
   // Family-blocked candidates (siblings/parent-child per the current plan) are NOT excluded here —
   // Friendship Seal is a same-sex A+ support, which siblings can still reach even when marriage
   // (Partner Seal, above) is blocked. Corrin IS excluded — nobody can actually reach A+ with Corrin
   // (that's the trigger Friendship Seal needs), so Corrin never has a friendship class to give, same
-  // as the Unit Planner's ownFriendEligible.
+  // as the Unit Planner's ownFriendEligible. variableParentOtherChild is NOT added here — a revealed
+  // sibling's replacement support is plain A-rank only, never A+/Friendship-Seal-eligible (see its
+  // comment above); the Unit Planner's Pair Up mechanics section is where that plain-A side lives.
   const friendOptions = useMemo(() => {
     if (!character) return []
     return participants.filter(
@@ -194,30 +264,6 @@ export function SkillPlanner() {
         : 'Spouse'
 
   const classTree = character ? getOwnClassTree(character, activeRoute) : undefined
-  const marriageClassName = character && wife ? getSealReclassClass(character, wife) : undefined
-  const marriageClassLine = marriageClassName ? getClassLine(marriageClassName, activeRoute) : []
-  const friendClassName = character && friend ? getSealReclassClass(character, friend) : undefined
-  const friendClassLine = friendClassName ? getClassLine(friendClassName, activeRoute) : []
-
-  // Children's class tree isn't their own Class Set at all — it's their own primary line plus
-  // whatever their fixed parent (father, for most; mother for a few, e.g. Midori) and variable
-  // parent (whoever the fixed parent marries) each contribute, per the same inheritance rules the
-  // Unit Planner tab already uses (see childCalculator.ts's fixedParentContribution/inheritClasses).
-  const fixedInfo = useMemo(() => (character?.isChild ? getFixedParent(character) : undefined), [character])
-  const variableCandidates = useMemo(() => {
-    if (!fixedInfo) return []
-    const fixedC = charactersById[fixedInfo.id]
-    if (!fixedC) return []
-    const isKana = character?.id === 'kana_m' || character?.id === 'kana_f'
-    return characters.filter((c) => {
-      if ((c.isChild && !isKana) || c.id === fixedC.id) return false
-      const father = fixedInfo.side === 'father' ? fixedC : c
-      const mother = fixedInfo.side === 'father' ? c : fixedC
-      return canProduceChild(supports, father, mother, activeRoute)
-    })
-  }, [fixedInfo, character, activeRoute])
-  const fixedChar = fixedInfo ? withCorrinBuild(charactersById[fixedInfo.id], corrinBuild) : undefined
-  const variableChar = variableParentId ? withCorrinBuild(charactersById[variableParentId], corrinBuild) : undefined
 
   const primaryClassLine = character ? getClassLine(character.startingClass, activeRoute) : []
   const fixedParentClassNames =
@@ -238,6 +284,33 @@ export function SkillPlanner() {
   const variableParentClassNames =
     childComputeResult?.inheritedClasses.filter((name) => !guaranteedChildClassNames.has(name)) ?? []
   const variableParentClassLines = variableParentClassNames.flatMap((name) => getClassLine(name, activeRoute))
+
+  // getSealReclassClass checks collisions against self.startingClass/secondaryClass/tertiaryClass —
+  // correct as-is for an adult (that IS their full Class Set), but for a child that's only their OWN
+  // 2-class Set, missing whatever their fixed/variable parents already guarantee them (e.g. Shigure's
+  // own Set is just Sky Knight/Troubadour, but pairing him with Subaki also guarantees Samurai via
+  // inheritance — a Marriage/Friendship Seal partner whose default is Samurai needs to see THAT
+  // collision too, not just his own 2). Substituting the child's full guaranteed set (own class +
+  // both parents' contributions, deduped — conveniently at most 3, the same number of slots
+  // startingClass/secondaryClass/tertiaryClass provide) into those 3 fields makes the existing
+  // collision check see the whole picture without changing getSealReclassClass itself. Before a
+  // variable parent is picked, falls back to just own + fixed parent (all that's known yet).
+  const childGuaranteedClasses = childComputeResult
+    ? childComputeResult.inheritedClasses
+    : Array.from(guaranteedChildClassNames).filter((n): n is string => Boolean(n))
+  const selfForSeal: Character | undefined =
+    character && character.isChild
+      ? {
+          ...character,
+          startingClass: childGuaranteedClasses[0] ?? character.startingClass,
+          secondaryClass: childGuaranteedClasses[1],
+          tertiaryClass: childGuaranteedClasses[2],
+        }
+      : character
+  const marriageClassName = selfForSeal && wife ? getSealReclassClass(selfForSeal, wife) : undefined
+  const marriageClassLine = marriageClassName ? getClassLine(marriageClassName, activeRoute) : []
+  const friendClassName = selfForSeal && friend ? getSealReclassClass(selfForSeal, friend) : undefined
+  const friendClassLine = friendClassName ? getClassLine(friendClassName, activeRoute) : []
 
   // DLC classes are open to anyone; Amiibo classes are gender-locked (e.g. Witch/Great Lord are
   // female-only, the other three male-only) — only offer classes this unit could actually reclass into.
@@ -311,8 +384,8 @@ export function SkillPlanner() {
     variableParentId,
   }
 
-  function handleLoadBuild(build: SavedBuild) {
-    const data = build.data as Partial<typeof currentBuildData>
+  function handleLoadEntry(entry: WorkingSetEntry) {
+    const data = entry.data as Partial<typeof currentBuildData>
     setCharacterId(typeof data.characterId === 'string' ? data.characterId : '')
     setWifeId(typeof data.wifeId === 'string' ? data.wifeId : '')
     setFriendId(typeof data.friendId === 'string' ? data.friendId : '')
@@ -598,18 +671,18 @@ export function SkillPlanner() {
           </div>
 
           <div data-export-hide>
-            <SavedBuildsManager
+            <BuildSetManager
               tab="skills"
-              characterName={character.name}
               route={activeRoute}
+              character={character}
               data={currentBuildData}
-              canSave={Boolean(character)}
-              onLoad={handleLoadBuild}
+              onLoadEntry={handleLoadEntry}
+              onSwitchRoute={setActiveRoute}
             />
           </div>
 
           <div data-export-hide className="space-y-3 rounded-lg border border-dashed border-neutral-800 bg-neutral-900/90 p-4">
-            <h3 className="text-base font-semibold text-neutral-100">General Skill Pool (all skills)</h3>
+            <h3 className="text-base font-semibold text-neutral-100">General Skill Pool (all legal skills)</h3>
             <p className="text-xs text-neutral-500">
               Every class and DLC skill in the game, in case you need to add something the sections
               above don't cover — e.g. a cross-route pairing, or a skill from another support

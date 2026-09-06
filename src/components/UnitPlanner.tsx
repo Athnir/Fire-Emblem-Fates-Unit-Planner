@@ -4,8 +4,8 @@ import { earliestChapterFor, earliestChildLevel, FINAL_CHAPTER, levelForChapter 
 import { classes as allClasses, classesById, classesByName } from '../data/classes'
 import { STAT_KEYS, type Character, type ClassData, type Route, type StatBlock } from '../data/types'
 import { childAvailableClasses, computeChild, fixedParentContribution } from '../logic/childCalculator'
-import { getFixedParent } from '../logic/childLookup'
-import { getOwnClassTree, isCorrinWithoutTalent, weaponRankBonus } from '../logic/classResolution'
+import { getFixedParent, isFamilyBlocked } from '../logic/childLookup'
+import { getClassLine, getOwnClassTree, isCorrinWithoutTalent, weaponRankBonus } from '../logic/classResolution'
 import { applyCorrinBuild, withCorrinBuild } from '../logic/corrinBuild'
 import { canFriendshipSeal, canMarry, canProduceChild, canSupport, isRouteCompatible } from '../logic/eligibility'
 import { classGrowthRate, classStatCap, classStatDelta, getStartingLevel, projectStats } from '../logic/levelProjection'
@@ -29,11 +29,11 @@ import {
 } from '../data/pairUpCharacterBonus'
 import { supports } from '../data/supports'
 import { useCorrinBuildStore, type CorrinBuild } from '../state/corrinBuildStore'
-import { usePlannerStore } from '../state/plannerStore'
-import type { SavedBuild } from '../state/savedBuildsStore'
+import { usePlannerStore, type Pairing } from '../state/plannerStore'
+import type { WorkingSetEntry } from '../state/savedBuildsStore'
 import { useScreenshotContextStore } from '../state/screenshotContextStore'
 import { RouteFilter } from './RouteFilter'
-import { SavedBuildsManager } from './SavedBuildsManager'
+import { BuildSetManager } from './BuildSetManager'
 
 const STAT_LABELS: Record<string, string> = {
   hp: 'HP', str: 'Str', mag: 'Mag', skl: 'Skl', spd: 'Spd', lck: 'Lck', def: 'Def', res: 'Res',
@@ -240,6 +240,8 @@ function MechanicsSection({
   getOwnVariableParentId,
   activeRoute,
   corrinBuild,
+  familyOverrideIds,
+  pairings,
 }: {
   classData: ClassData | undefined
   statCaps?: StatBlock
@@ -250,6 +252,14 @@ function MechanicsSection({
   getOwnVariableParentId: (childId: string) => string | undefined
   activeRoute: Route
   corrinBuild: CorrinBuild
+  /** ownCharacter's revealed half-sibling AND the Variable parent themselves, per its own Variable
+   * parent picker, if selected — see that picker's comment in UnitDetail. Affects partnerOptions
+   * below: excluded from the S-rank tier even where canMarry says yes, added to the A-rank tier
+   * even where canSupport has no data at all — that tier is a plain combat support bonus, not
+   * Friendship Seal, so this never touches ownFriendEligible/Friendship Seal eligibility elsewhere
+   * in this file. */
+  familyOverrideIds: string[]
+  pairings: Pairing[]
 }) {
   const [moveSkillOn, setMoveSkillOn] = useState(false)
   const [bootsOn, setBootsOn] = useState(false)
@@ -276,15 +286,19 @@ function MechanicsSection({
   // route works ("No rank"). A-rank and S-rank narrow that down to who this unit can actually reach
   // that support tier with, per the real support-pair data (canSupport covers A, B, and friendship
   // ranks; S-capable partners also satisfy "at least A" so they appear in that tier too).
+  // familyOverrideIds replaces whatever their normal support would've been (S, A, or none) with a
+  // straight A-rank-only one: excluded from S even if canMarry/pairings would otherwise allow it,
+  // included in A even if canSupport has no data for them at all.
   const partnerOptions = useMemo(() => {
     return characters.filter((c) => {
       if (c.id === ownCharacter.id) return false
       if (!isRouteCompatible(c.route, activeRoute)) return false
-      if (pairUpRank === 'S') return canMarry(supports, ownCharacter, c, activeRoute)
-      if (pairUpRank === 'A') return canSupport(supports, ownCharacter, c, activeRoute)
+      const isFamilyOverride = familyOverrideIds.includes(c.id)
+      if (pairUpRank === 'S') return !isFamilyOverride && canMarry(supports, ownCharacter, c, activeRoute) && !isFamilyBlocked(ownCharacter, c, pairings)
+      if (pairUpRank === 'A') return isFamilyOverride || canSupport(supports, ownCharacter, c, activeRoute)
       return true
     })
-  }, [ownCharacter, activeRoute, pairUpRank])
+  }, [ownCharacter, activeRoute, pairUpRank, familyOverrideIds, pairings])
 
   const partner = pairUpPartnerId ? charactersById[pairUpPartnerId] : undefined
   // If the partner is a child, their available classes depend on their own fixed/variable parents
@@ -397,8 +411,7 @@ function MechanicsSection({
         {givenCharacterBonus === undefined && (
           <p className="mb-1.5 text-xs text-amber-400">
             Fill in everything needed to resolve this bonus (variable parent, Corrin's boon/bane if
-            either parent is Corrin) to see real numbers here — showing "–" rather than a total that
-            would otherwise look complete but is missing a piece.
+            Corrin is a parent) to show the real numbers.
           </p>
         )}
         <div className="grid max-w-sm grid-cols-4 gap-x-3 gap-y-1 text-sm">
@@ -541,6 +554,7 @@ function UnitDetail({
   pendingBuildData,
   onConsumePendingBuildData,
   onRequestLoadBuild,
+  onSwitchRoute,
 }: {
   character: Character
   activeRoute: Route
@@ -551,7 +565,8 @@ function UnitDetail({
    * actually remounted this component (loading a build for the ALREADY-selected character doesn't). */
   pendingBuildData: Record<string, unknown> | null
   onConsumePendingBuildData: () => void
-  onRequestLoadBuild: (build: SavedBuild) => void
+  onRequestLoadBuild: (entry: WorkingSetEntry) => void
+  onSwitchRoute: (route: Route) => void
 }) {
   const isCorrin = rawCharacter.id === 'corrin_m' || rawCharacter.id === 'corrin_f'
   const character = isCorrin ? applyCorrinBuild(rawCharacter, corrinBuild) : rawCharacter
@@ -616,6 +631,31 @@ function UnitDetail({
   }
   const variableChar = variableParentId ? withCorrinBuild(charactersById[variableParentId], corrinBuild) : undefined
 
+  const pairings = usePlannerStore((state) => state.pairings)
+  // Only relevant once this unit's own Variable parent picker above has an actual selection (no
+  // pick yet -> no adjustment): does that parent already have a different assigned child of their
+  // own (their fixed side elsewhere, e.g. Subaki -> Caeldori)? If so, that child becomes a
+  // half-sibling of `character` in this preview — incest, so per the game's actual rule their
+  // support caps at A-rank: excluded from ownSpouseOptions' S-rank options below even where canMarry
+  // says yes, and from the Pair Up mechanics section's own S-rank tier — but added to its A-rank
+  // tier even where canSupport has no data for them at all (that tier is a plain combat support
+  // bonus, unrelated to Friendship Seal, which stays untouched — see MechanicsSection's
+  // partnerOptions and its comment). Same reasoning as SkillPlanner's identical check on wifeOptions.
+  const variableParentOtherChild = variableChar
+    ? characters.find(
+        (c) => c.isChild && c.id !== character.id && isRouteCompatible(c.route, activeRoute) && getFixedParent(c)?.id === variableChar.id,
+      )
+    : undefined
+  // The Variable parent themselves gets the identical family-override treatment as their other
+  // child above — excluded from S-rank (a parent can't marry their own kid; usually a no-op since a
+  // normal adult like Subaki was never a marriage candidate for their kid anyway, but matters for
+  // Corrin, who CAN normally marry a non-Kana child) and added to A-rank in the Pair Up section
+  // below even with no data at all (representing the parent/child bond itself, not just the
+  // sibling relationship it reveals).
+  const familyOverrideIds = [variableChar?.id, variableParentOtherChild?.id].filter(
+    (id): id is string => Boolean(id),
+  )
+
   // Children auto-level with story progress rather than joining at one fixed level — the earliest
   // selectable chapter is their own real unlock requirement (never before Ch8, the earliest any
   // Deeprealms child can appear), and the level curve (src/data/childLeveling.ts) converts whatever
@@ -625,8 +665,27 @@ function UnitDetail({
   const effectiveChapter = earliestChapter !== undefined ? Math.max(chapter, earliestChapter) : undefined
   const chapterInfo = effectiveChapter !== undefined ? levelForChapter(effectiveChapter) : undefined
   const childAutoPromoted = Boolean(chapterInfo?.promoted)
+  // Once a child auto-promotes (Ch19+), the story gives them a free Offspring Seal — defaults to
+  // used, which only affects what they promote into BY DEFAULT (own line's promotion, e.g. Hero or
+  // Bow Knight for Soleil, never an inherited class) at exactly the level that free seal jumps them
+  // to (already what childLevel/chapterInfo above compute — no separate level logic needed). This
+  // never locks the class picker below — every available class (own or inherited) stays clickable
+  // either way, same as "then allow normal selection of all valid classes again" describes: picking
+  // a different one there (optionally "Lock in" it as the baseline too) is exactly how reclassing
+  // away from the free seal — a Master/Heart Seal into an inherited class instead — gets modeled,
+  // with no extra state needed for that. Unchecking this just changes the FALLBACK when nothing's
+  // been manually picked yet, back to today's arbitrary first-available (possibly inherited) class.
+  const [useOffspringSeal, setUseOffspringSeal] = useState(true)
 
   const childLevel = chapterInfo?.level ?? earliestChildLevel(character.unlockChapter, activeRoute)
+  // computeBaseStat's formula anchors growth to a Lv10 baseline via (level - 10) — correct for
+  // childLevel directly across the unpromoted 10-20 range, but chapterInfo.level RESETS to a small
+  // tier-relative number once promoted (Ch19's "Lv2" means 2 levels since promoting, not an absolute
+  // level 2) — feeding that straight into the formula would undercount an auto-promoted child's Base
+  // Stats badly (even a negative (level-10) for most of the promoted range). The formula needs the
+  // TOTAL real level-ups experienced instead: the full base tier (always maxed at 20 before any
+  // promotion can happen at all) plus however many promoted levels chapterInfo.level reports.
+  const childStatLevel = chapterInfo?.promoted ? 20 + chapterInfo.level : childLevel
   const childResult =
     fixedInfo && fixedChar && variableChar
       ? computeChild({
@@ -635,7 +694,7 @@ function UnitDetail({
           mother: fixedInfo.side === 'father' ? variableChar : fixedChar,
           fatherCurrentStats: (fixedInfo.side === 'father' ? fixedChar : variableChar).baseStats,
           motherCurrentStats: (fixedInfo.side === 'father' ? variableChar : fixedChar).baseStats,
-          level: childLevel,
+          level: childStatLevel,
         })
       : undefined
 
@@ -673,9 +732,26 @@ function UnitDetail({
   const isCorrinSelf = character.id === 'corrin_m' || character.id === 'corrin_f'
   const [ownSpouseId, setOwnSpouseId] = useState('')
   const [ownFriendId, setOwnFriendId] = useState('')
+  // Family-blocked candidates are excluded here — real committed conflicts (isFamilyBlocked, per
+  // the actual Marriage Planner plan) and, only relevant for Kana/Shigure, whoever this tab's own
+  // Variable parent picker above currently reveals as a family conflict even with nothing committed
+  // to the plan yet (familyOverrideIds — both the revealed half-sibling and the Variable parent
+  // themselves, see its comment above) — same check SkillPlanner's wifeOptions uses. Never excluded
+  // from ownFriendEligible below: neither one qualifies for Friendship Seal either (that needs its
+  // own A-rank tier, not marriage-track data), but this app models that A-rank as the separate Pair
+  // Up mechanics section further down, not a Friendship Seal grant — see MechanicsSection's
+  // partnerOptions.
   const ownSpouseOptions = useMemo(
-    () => characters.filter((c) => c.id !== character.id && isRouteCompatible(c.route, activeRoute) && canMarry(supports, character, c, activeRoute)),
-    [character, activeRoute],
+    () =>
+      characters.filter(
+        (c) =>
+          c.id !== character.id &&
+          isRouteCompatible(c.route, activeRoute) &&
+          canMarry(supports, character, c, activeRoute) &&
+          !isFamilyBlocked(character, c, pairings) &&
+          !familyOverrideIds.includes(c.id),
+      ),
+    [character, activeRoute, pairings, familyOverrideIds],
   )
   const ownSpouse = ownSpouseId ? withCorrinBuild(charactersById[ownSpouseId], corrinBuild) : undefined
   // For everyone else, Corrin is excluded from these options: nobody can actually reach A+ with
@@ -729,9 +805,26 @@ function UnitDetail({
     character, activeRoute, joinsPromoted, fixedInfo, fixedChar, variableChar, unlockedItemClasses,
     ownSpouse, friendshipSourceForPicker,
   ])
-  // An auto-promoted child has no real "default" promoted class (their base class often has two
-  // promotion options) — just fall back to whichever promoted option sorts first.
-  const defaultClassName = childAutoPromoted ? (availableClasses[0]?.name ?? rawDefaultClassName) : rawDefaultClassName
+  // An auto-promoted child defaults into whichever promotion the free Offspring Seal would actually
+  // give them — their OWN Class Set's promoted tier only (e.g. Hero or Bow Knight for Soleil, never
+  // an inherited class; already route-locked correctly for Kana via getClassLine's own handling of
+  // Nohr Prince(ss)'s routeLockedPromotions, which never has more than one option per route anyway).
+  // When there IS a real choice (two own promotions, e.g. Soleil), sealPromotedClassId is a binary
+  // pick between them — defaults to whichever sorts first, but is a real user choice, not just an
+  // arbitrary tiebreak, since it changes which class the whole seal-jump calculation below runs
+  // through. This is only ever the STARTING selection: every class in availableClasses above (own or
+  // inherited) remains freely clickable regardless, exactly like reclassing away from the free seal
+  // via a Master/Heart Seal instead — see useOffspringSeal's comment. Unchecking the seal, or for a
+  // child who has no promotion of their own on this route at all, falls back to today's arbitrary
+  // first-available class.
+  const ownPromotedClasses = character.isChild
+    ? getClassLine(character.startingClass, activeRoute).filter((c) => c.tier === 'promoted')
+    : []
+  const [sealPromotedClassId, setSealPromotedClassId] = useState<string | undefined>(undefined)
+  const sealPromotedClass = ownPromotedClasses.find((c) => c.id === sealPromotedClassId) ?? ownPromotedClasses[0]
+  const defaultClassName = childAutoPromoted
+    ? (useOffspringSeal ? sealPromotedClass?.name : undefined) ?? availableClasses[0]?.name ?? rawDefaultClassName
+    : rawDefaultClassName
   const defaultClassId = classesByName[defaultClassName]?.id ?? availableClasses[0]?.id
   const [selectedClassId, setSelectedClassId] = useState(defaultClassId)
   const selectedClass = availableClasses.find((c) => c.id === selectedClassId) ?? classesByName[defaultClassName]
@@ -894,6 +987,46 @@ function UnitDetail({
   const promotedLevelsUsed = promotedSegments.reduce((sum, s) => sum + s.levels, 0)
   const validPromotedSegments = resolveSegments(promotedSegments, promotedClassPoolOptions)
 
+  // Narrates AND computes what the free Offspring Seal assumes, as two non-editable rows at the top
+  // of Projected Stats: full levels in the child's own starting class up to the base cap (20), then
+  // however many levels the current story chapter's curve says they've had since promoting into
+  // sealPromotedClass.
+  const sealJumpActive = character.isChild && childAutoPromoted && useOffspringSeal
+  const sealPromotedLevels = sealJumpActive ? Math.max(0, childLevel - 1) : 0
+  // The actual stat baseline this jump produces. The base-tier portion is read directly off the real
+  // child-stat formula at level 20 (computeChild's own (level - 10) anchor — universal across every
+  // child regardless of their own earliest-possible recruit level, e.g. Soleil's Lv12 minimum on
+  // Conquest is NOT the baseline this scales from; the formula always measures growth from Lv10,
+  // full stop), rather than snapshotting at some earlier level and then simulating the remaining
+  // levels via projectSegments — that would double up on growth, since projectSegments' per-level
+  // growth (classGrowthRate) adds the CLASS's own growth modifier on top of personal growth, which
+  // the recruit-time formula never does. Only the PROMOTED portion legitimately uses projectSegments
+  // (real leveling after the recruit-time snapshot, where a class growth bonus genuinely applies).
+  const sealOwnBaseClass = character.isChild ? classesByName[character.startingClass] : undefined
+  const sealBaseTierStats =
+    sealJumpActive && fixedInfo && fixedChar && variableChar
+      ? computeChild({
+          child: character,
+          father: fixedInfo.side === 'father' ? fixedChar : variableChar,
+          mother: fixedInfo.side === 'father' ? variableChar : fixedChar,
+          fatherCurrentStats: (fixedInfo.side === 'father' ? fixedChar : variableChar).baseStats,
+          motherCurrentStats: (fixedInfo.side === 'father' ? variableChar : fixedChar).baseStats,
+          level: 20,
+        }).baseStats
+      : undefined
+  const sealJumpBaseline =
+    sealBaseTierStats && sealOwnBaseClass && sealPromotedClass
+      ? (() => {
+          const bumpDelta = classStatDelta(sealPromotedClass.statModifiers, sealOwnBaseClass.statModifiers)
+          const bumpCap = classStatCap(sealPromotedClass, effectiveMaxStatModifiers)
+          const postBump = {} as StatBlock
+          for (const key of STAT_KEYS) postBump[key] = Math.min(sealBaseTierStats[key] + bumpDelta[key], bumpCap[key])
+          return projectSegments(postBump, effectiveGrowthRates, effectiveMaxStatModifiers, [
+            { classData: sealPromotedClass, levels: sealPromotedLevels },
+          ])
+        })()
+      : undefined
+
   const multiClassResult: StatBlock | undefined = (() => {
     if (!multiClassOn) return undefined
     if (!promotedPhaseUnlocked) {
@@ -901,7 +1034,13 @@ function UnitDetail({
     }
     let stageAStats: StatBlock
     let stageAClass: ClassData | undefined
-    if (!canMultiClassPromote) {
+    if (sealJumpActive && sealJumpBaseline && sealPromotedClass) {
+      // The seal's assumed jump already IS the pre-promotion phase for this unit — build any further
+      // free segments straight on top of it, using the CHOSEN promotion (not whatever the plain
+      // picker shows) as the class the bump-to-destination math starts from.
+      stageAStats = sealJumpBaseline
+      stageAClass = sealPromotedClass
+    } else if (!canMultiClassPromote) {
       // Already promoted from the start (joinsPromoted) — no pre-promotion phase to multi-class through.
       stageAStats = effectiveBaseStats
       stageAClass = originalClass
@@ -970,7 +1109,7 @@ function UnitDetail({
     unlockedItemClassIds,
   }
 
-  // Applying restore data as a plain function call (from SavedBuildsManager's onLoad) wouldn't work
+  // Applying restore data as a plain function call (from BuildSetManager's onLoadEntry) wouldn't work
   // when the build is for a DIFFERENT character than the one currently mounted here — UnitPlanner
   // owns `unitId`, so it has to switch characters itself first (see onRequestLoadBuild below) and
   // hand the data back down as a prop once the right character is showing. Keying this effect off
@@ -1018,6 +1157,35 @@ function UnitDetail({
             At Ch{effectiveChapter}: Lv{childLevel}{childAutoPromoted ? ' (promoted)' : ''} · earliest possible is Ch{earliestChapter}
           </span>
         </label>
+      )}
+      {character.isChild && childAutoPromoted && (
+        <label className="flex items-center gap-2 text-xs text-neutral-400">
+          <input
+            type="checkbox"
+            checked={useOffspringSeal}
+            onChange={(e) => setUseOffspringSeal(e.target.checked)}
+          />
+          Used the free Offspring Seal (defaults to a promotion below — still free to pick any other available class instead)
+        </label>
+      )}
+      {character.isChild && childAutoPromoted && useOffspringSeal && ownPromotedClasses.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-400">
+          Promoted into
+          {ownPromotedClasses.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => setSealPromotedClassId(c.id)}
+              className={`rounded-md border px-2 py-1 text-xs transition-colors ${
+                sealPromotedClass?.id === c.id
+                  ? 'border-violet-500 bg-violet-950/50 text-violet-200'
+                  : 'border-neutral-700 bg-neutral-800 text-neutral-300 hover:border-neutral-600'
+              }`}
+            >
+              {c.name}
+            </button>
+          ))}
+        </div>
       )}
       {character.isChild && fixedInfo && (
         <label className="flex flex-col gap-1 text-xs text-neutral-400">
@@ -1187,6 +1355,13 @@ function UnitDetail({
         </label>
       )}
 
+      {character.isChild && !childResult && (
+        <p className="text-xs text-amber-400">
+          Fill in everything needed to show the correct numbers (variable parent, Corrin's boon/bane
+          if Corrin is a parent).
+        </p>
+      )}
+
       <div className="space-y-4">
         <StatTable
           title={aptitudeOn ? 'Growth % (with Aptitude)' : 'Growth %'}
@@ -1230,6 +1405,25 @@ function UnitDetail({
           <h4 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
             Projected Stats ({selectedClass?.name})
           </h4>
+
+          {sealJumpActive && (
+            <div className="space-y-1.5 rounded-md border border-neutral-800 bg-neutral-900/60 p-2">
+              <p className="text-xs text-neutral-500">
+                Assumed from the free Offspring Seal — not editable (uncheck it above to plan this
+                differently instead):
+              </p>
+              <div className="flex flex-wrap items-center gap-2 rounded-md border border-neutral-800 p-2 opacity-70">
+                <span className="text-xs text-neutral-300">{character.startingClass}</span>
+                <span className="text-xs text-neutral-500">Maxed at Lv20</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 rounded-md border border-neutral-800 p-2 opacity-70">
+                <span className="text-xs text-neutral-300">{sealPromotedClass?.name ?? character.startingClass}</span>
+                <span className="text-xs text-neutral-500">
+                  Lv1 → Lv{childLevel} ({sealPromotedLevels} levels)
+                </span>
+              </div>
+            </div>
+          )}
 
           {!multiClassOn && crossesPromotion && (
             <label className="flex items-center gap-2 text-xs text-neutral-300">
@@ -1369,6 +1563,8 @@ function UnitDetail({
         getOwnVariableParentId={getOwnVariableParentId}
         activeRoute={activeRoute}
         corrinBuild={corrinBuild}
+        familyOverrideIds={familyOverrideIds}
+        pairings={pairings}
       />
 
       {!character.isChild && (
@@ -1383,13 +1579,13 @@ function UnitDetail({
       )}
 
       <div data-export-hide>
-        <SavedBuildsManager
+        <BuildSetManager
           tab="unit"
-          characterName={character.name}
           route={activeRoute}
+          character={character}
           data={currentBuildData}
-          canSave
-          onLoad={onRequestLoadBuild}
+          onLoadEntry={onRequestLoadBuild}
+          onSwitchRoute={onSwitchRoute}
         />
       </div>
     </div>
@@ -1398,6 +1594,7 @@ function UnitDetail({
 
 export function UnitPlanner() {
   const activeRoute = usePlannerStore((state) => state.activeRoute)
+  const setActiveRoute = usePlannerStore((state) => state.setActiveRoute)
   const corrinBuild = useCorrinBuildStore((state) => state.build)
   const [unitId, setUnitId] = useState('')
   // Saved builds' configuration data lives inside UnitDetail's own local state, but the character
@@ -1412,11 +1609,22 @@ export function UnitPlanner() {
   )
   const character = unitId ? charactersById[unitId] : undefined
 
-  function handleRequestLoadBuild(build: SavedBuild) {
-    const characterId = typeof build.data.characterId === 'string' ? build.data.characterId : ''
-    if (!characterId || !charactersById[characterId]) return
-    setUnitId(characterId)
-    setPendingBuildData(build.data)
+  // Switching routes can leave a unit selected that doesn't exist on the new one (e.g. picking Leo
+  // on Conquest, then switching to Birthright without picking a new unit first) — the dropdown
+  // itself would still show him and the Build Set panel below would happily let you add him to
+  // Birthright's bucket, which should be impossible. Clearing the pick whenever it falls outside
+  // the new route's roster closes that gap.
+  useEffect(() => {
+    if (unitId && !participants.some((c) => c.id === unitId)) {
+      setUnitId('')
+      setPendingBuildData(null)
+    }
+  }, [unitId, participants])
+
+  function handleRequestLoadBuild(entry: WorkingSetEntry) {
+    if (!entry.characterId || !charactersById[entry.characterId]) return
+    setUnitId(entry.characterId)
+    setPendingBuildData(entry.data)
   }
 
   return (
@@ -1445,6 +1653,7 @@ export function UnitPlanner() {
             pendingBuildData={pendingBuildData}
             onConsumePendingBuildData={() => setPendingBuildData(null)}
             onRequestLoadBuild={handleRequestLoadBuild}
+            onSwitchRoute={setActiveRoute}
           />
         )}
       </div>
