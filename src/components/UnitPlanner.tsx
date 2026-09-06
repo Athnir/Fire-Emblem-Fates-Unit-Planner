@@ -1174,7 +1174,7 @@ function UnitDetail({
           )}
           {ownSpouse && isCorrinWithoutTalent(ownSpouse) && (
             <p className="text-xs text-neutral-500">
-              Select {ownSpouse.name}'s Talent in the Corrin Build panel to see the class gained through this marriage.
+              Set Corrin's Talent in the Corrin Build panel to see the class {ownSpouse.name} grants through this marriage.
             </p>
           )}
         </div>

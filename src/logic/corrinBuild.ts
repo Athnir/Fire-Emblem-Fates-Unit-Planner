@@ -107,10 +107,31 @@ export function applyCorrinBuild(character: Character, build: CorrinBuild): Char
   }
 }
 
-/** Corrin's boon/bane/talent selection (set in the Corrin Build panel) affects stats and class inheritance/reclass anywhere a Corrin appears. Non-Corrin characters pass through unchanged. */
+/**
+ * Kana's own Class Set has a fixed default (Nohr Prince(ss), locked, same as Corrin) but their
+ * secondary is never their own independent data — they canonically inherit whichever Talent the
+ * player picked for Corrin (their parent) as their own secondary class. characters.ts stores a
+ * placeholder ('Cavalier') there since Character.secondaryClass can't be left blank; this swaps in
+ * the real, currently-selected Talent instead, gender-corrected to Kana's own gender (same as
+ * Corrin's own display in applyCorrinBuild) — matters everywhere Kana is looked up as a Character,
+ * primarily as a Partner/Friendship Seal giver to someone else (see getSealReclassClass), since
+ * fixedParentContribution already derives Kana's own available classes straight from the real
+ * Corrin parent object rather than this field.
+ */
+function withKanaTalent(character: Character, build: CorrinBuild): Character {
+  // Always overrides, even to undefined when no Talent is picked yet — characters.ts's placeholder
+  // ('Cavalier') must never leak through here, or a no-Talent-yet Kana would misreport a real
+  // collision against whichever recipient happens to already have Cavalier (see
+  // isCorrinWithoutTalent below, which needs this to be genuinely unset to detect that state).
+  const talentClass = build.talentClass ? correctGenderedClass(build.talentClass, character.gender) : undefined
+  return { ...character, secondaryClass: talentClass }
+}
+
+/** Corrin's boon/bane/talent selection (set in the Corrin Build panel) affects stats and class inheritance/reclass anywhere a Corrin appears, and Kana's inherited Talent class anywhere Kana appears. Everyone else passes through unchanged. */
 export function withCorrinBuild(character: Character, build: CorrinBuild): Character {
-  if (character.id !== 'corrin_m' && character.id !== 'corrin_f') return character
-  return applyCorrinBuild(character, build)
+  if (character.id === 'corrin_m' || character.id === 'corrin_f') return applyCorrinBuild(character, build)
+  if (character.id === 'kana_m' || character.id === 'kana_f') return withKanaTalent(character, build)
+  return character
 }
 
 /**

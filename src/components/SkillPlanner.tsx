@@ -3,9 +3,10 @@ import { characters, charactersById } from '../data/characters'
 import { classes as allClasses } from '../data/classes'
 import { skills, skillsById } from '../data/skills'
 import { supports } from '../data/supports'
-import type { ClassData, Gender } from '../data/types'
+import type { ClassData, Gender, Skill } from '../data/types'
 import {
   classSkillsForGender,
+  gen1UnreachableSkillIds,
   getClassLine,
   getOwnClassTree,
   getSealReclassClass,
@@ -33,6 +34,14 @@ const skillIdByName: Record<string, string> = Object.fromEntries(skills.map((s) 
 const ITEM_CLASSES = allClasses.filter((c) => c.isDlcClass || c.isAmiibo)
 
 const COMBAT_BONUS_LABELS: Record<string, string> = { hit: 'Hit', avoid: 'Avoid', crit: 'Crit', dodge: 'Dodge' }
+
+/** " (DLC/Item)"-style suffix for a skill reachable through more than one non-class-tree source
+ * (e.g. Warp: a DLC class AND a Scroll item) — combined into one tag rather than one per source,
+ * since e.g. Warp having both "(DLC)" and "(Item)" printed separately reads as two different skills. */
+function skillOriginTag(s: Skill): string {
+  const tags = [s.isDlc && 'DLC', s.isAmiibo && 'Amiibo', s.isItem && 'Item'].filter((t): t is string => Boolean(t))
+  return tags.length ? ` (${tags.join('/')})` : ''
+}
 
 /** One line per field: Mov, then each weapon rank (skipping slots the class doesn't have), then
  * the class's innate combat bonus (parenthesized, omitted entirely when the class has none). */
@@ -252,16 +261,23 @@ export function SkillPlanner() {
     if (personalId) ids.add(personalId)
     if (character.isChild) {
       addAll(primaryClassLine, character.gender)
-      if (fixedChar) addAll(fixedParentClassLines, fixedChar.gender)
-      if (variableChar) addAll(variableParentClassLines, variableChar.gender)
+      if (fixedChar) addAll(fixedParentClassLines, character.gender)
+      if (variableChar) addAll(variableParentClassLines, character.gender)
     } else {
       addAll([...(classTree?.base ?? []), ...(classTree?.secondary ?? []), ...(classTree?.tertiary ?? [])], character.gender)
     }
-    if (wife) addAll(marriageClassLine, wife.gender)
-    if (friend) addAll(friendClassLine, friend.gender)
+    if (wife) addAll(marriageClassLine, character.gender)
+    if (friend) addAll(friendClassLine, character.gender)
     addAll(unlockedItemClasses, character.gender)
     return Array.from(ids)
   })()
+
+  // Skills whose only source is a class this specific unit could never actually hold — a locked
+  // class (Nohr Prince(ss), Songstress, Villager, Kitsune, Wolfskin) they don't personally own, or
+  // the wrong half of Troubadour's gendered skill pair — hidden from the general pool below since
+  // no amount of route/pairing choices could ever make them real for this unit. See
+  // gen1UnreachableSkillIds for why this only applies to Gen 1 (non-child) units.
+  const unreachableIds = character ? gen1UnreachableSkillIds(character) : []
 
   function toggleLoadout(skillId: string) {
     setLoadout((prev) => {
@@ -417,7 +433,7 @@ export function SkillPlanner() {
                 </h4>
                 <div className="space-y-2">
                   {fixedParentClassLines.map((cls) => (
-                    <ClassSkillRow key={cls.id} cls={cls} gender={fixedChar.gender} loadout={loadout} onToggle={toggleLoadout} />
+                    <ClassSkillRow key={cls.id} cls={cls} gender={character.gender} loadout={loadout} onToggle={toggleLoadout} />
                   ))}
                 </div>
               </div>
@@ -430,7 +446,7 @@ export function SkillPlanner() {
                 </h4>
                 <div className="space-y-2">
                   {variableParentClassLines.map((cls) => (
-                    <ClassSkillRow key={cls.id} cls={cls} gender={variableChar.gender} loadout={loadout} onToggle={toggleLoadout} />
+                    <ClassSkillRow key={cls.id} cls={cls} gender={character.gender} loadout={loadout} onToggle={toggleLoadout} />
                   ))}
                 </div>
               </div>
@@ -472,14 +488,14 @@ export function SkillPlanner() {
                 </h4>
                 <div className="space-y-2">
                   {marriageClassLine.map((cls) => (
-                    <ClassSkillRow key={cls.id} cls={cls} gender={wife.gender} loadout={loadout} onToggle={toggleLoadout} />
+                    <ClassSkillRow key={cls.id} cls={cls} gender={character.gender} loadout={loadout} onToggle={toggleLoadout} />
                   ))}
                 </div>
               </div>
             )}
             {wife && isCorrinWithoutTalent(wife) && (
               <p className="text-xs text-neutral-500">
-                Select {wife.name}'s Talent in the Corrin Build panel to see the class gained through this marriage.
+                Set Corrin's Talent in the Corrin Build panel to see the class {wife.name} grants through this marriage.
               </p>
             )}
 
@@ -490,14 +506,14 @@ export function SkillPlanner() {
                 </h4>
                 <div className="space-y-2">
                   {friendClassLine.map((cls) => (
-                    <ClassSkillRow key={cls.id} cls={cls} gender={friend.gender} loadout={loadout} onToggle={toggleLoadout} />
+                    <ClassSkillRow key={cls.id} cls={cls} gender={character.gender} loadout={loadout} onToggle={toggleLoadout} />
                   ))}
                 </div>
               </div>
             )}
             {friend && isCorrinWithoutTalent(friend) && (
               <p className="text-xs text-neutral-500">
-                Select {friend.name}'s Talent in the Corrin Build panel to see the class gained through this friendship.
+                Set Corrin's Talent in the Corrin Build panel to see the class {friend.name} grants through this friendship.
               </p>
             )}
 
@@ -542,28 +558,41 @@ export function SkillPlanner() {
             <h3 className="text-base font-semibold text-neutral-100">
               Loadout ({loadout.length}/{MAX_LOADOUT})
             </h3>
+            {loadout.some((id) => !availablePoolIds.includes(id)) && (
+              <p className="text-xs text-neutral-500">📖 means the skill was pulled from the Logbook (the General Skill Pool below), not from {character.name}'s own class trees above.</p>
+            )}
             {loadout.length === 0 ? (
               <p className="text-sm text-neutral-500">No skills selected yet — click any skill above to add it.</p>
             ) : (
               <ul className="flex flex-wrap gap-2">
-                {loadout.map((id) => (
-                  <li key={id}>
-                    <button
-                      type="button"
-                      onClick={() => toggleLoadout(id)}
-                      className="flex min-w-[10rem] max-w-xs flex-col gap-0.5 rounded-md border border-violet-500 bg-violet-950/50 px-2 py-1 text-left text-xs text-violet-200 hover:border-red-400 hover:text-red-300"
-                    >
-                      <span className="flex items-center gap-1.5">
-                        <AssetIcon type="skill" iconId={id} label={skillsById[id]?.name ?? id} size={18} />
-                        <span className="min-w-0 break-words">{skillsById[id]?.name ?? id}</span>
-                        <span className="ml-auto shrink-0">×</span>
-                      </span>
-                      {skillsById[id]?.description && (
-                        <span className="text-[10px] leading-tight text-violet-300/80">{skillsById[id].description}</span>
-                      )}
-                    </button>
-                  </li>
-                ))}
+                {loadout.map((id) => {
+                  const fromLogbook = !availablePoolIds.includes(id)
+                  return (
+                    <li key={id}>
+                      <button
+                        type="button"
+                        onClick={() => toggleLoadout(id)}
+                        className="flex min-w-[10rem] max-w-xs flex-col gap-0.5 rounded-md border border-violet-500 bg-violet-950/50 px-2 py-1 text-left text-xs text-violet-200 hover:border-red-400 hover:text-red-300"
+                      >
+                        <span className="flex items-center gap-1.5">
+                          <AssetIcon type="skill" iconId={id} label={skillsById[id]?.name ?? id} size={18} />
+                          <span className="min-w-0 break-words">{skillsById[id]?.name ?? id}</span>
+                          <span className="ml-auto flex shrink-0 items-center gap-1">
+                            {fromLogbook && (
+                              <span title={`From the Logbook — not offered by ${character.name}'s class trees above for the current route/pairings`}>
+                                📖
+                              </span>
+                            )}
+                            <span>×</span>
+                          </span>
+                        </span>
+                        {skillsById[id]?.description && (
+                          <span className="text-[10px] leading-tight text-violet-300/80">{skillsById[id].description}</span>
+                        )}
+                      </button>
+                    </li>
+                  )
+                })}
               </ul>
             )}
           </div>
@@ -596,7 +625,7 @@ export function SkillPlanner() {
             />
             <div className="flex flex-wrap gap-2">
               {skills
-                .filter((s) => !s.isPersonal && !availablePoolIds.includes(s.id))
+                .filter((s) => !s.isPersonal && !availablePoolIds.includes(s.id) && !unreachableIds.includes(s.id))
                 .filter((s) => s.name.toLowerCase().includes(poolSearch.trim().toLowerCase()))
                 .map((s) => {
                   const selected = loadout.includes(s.id)
@@ -615,9 +644,7 @@ export function SkillPlanner() {
                         <AssetIcon type="skill" iconId={s.id} label={s.name} size={18} />
                         <span className="min-w-0 break-words">
                           {s.name}
-                          {s.isDlc ? ' (DLC)' : ''}
-                          {s.isAmiibo ? ' (Amiibo)' : ''}
-                          {s.isItem ? ' (Item)' : ''}
+                          {skillOriginTag(s)}
                         </span>
                       </span>
                       {s.description && <span className="text-[10px] leading-tight text-neutral-500">{s.description}</span>}

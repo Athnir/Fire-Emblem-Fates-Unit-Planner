@@ -211,7 +211,8 @@ export const skills: Skill[] = [
   skill('clarity', 'Clarity', 'Recovers from status-reducing effects twice as fast.', dlc),
   skill('aggressor', 'Aggressor', '+7 damage dealt when the user initiates combat.', dlc),
   skill('shadowgift', 'Shadowgift', 'Allows equipping Dark Mage-exclusive tomes regardless of class.', dlc),
-  skill('warp', 'Warp', 'On command, moves the user adjacent to a target ally and grants another action.', dlc),
+  // Also a Scroll-item reward (any character, any class) — unlike its DLC-class siblings above.
+  skill('warp', 'Warp', 'On command, moves the user adjacent to a target ally and grants another action.', { ...dlc, ...item }),
   skill('witchs_brew', 'Witch’s Brew', '(Luck)% chance to obtain a potion-type item after moving, during the first seven turns.', dlc),
   skill('toxic_brew', 'Toxic Brew', '(Skill × 1.5)% chance to reduce the enemy’s Movement to 0 and Avoid by 20 until the next turn, when the user initiates combat.', dlc),
   skill('speed_2', 'Speed +2', 'Raises Speed by 2.', dlc),
@@ -232,11 +233,12 @@ export const skills: Skill[] = [
   skill('dancing_blade', 'Dancing Blade', '+3 Speed, -1 Defense.', amiibo),
   skill('charm', 'Charm', 'Allies within 2 tiles of the user deal 2 extra damage in battle.', amiibo),
   skill('dual_guarder', 'Dual Guarder', 'As the support unit in a Pair Up, +1 to the user’s shield gauge gain.', amiibo),
-  skill('speedtaker', 'Speedtaker', '+2 Speed (up to +10) whenever the user defeats a foe, resetting each chapter.', amiibo),
-  skill('heavy_blade', 'Heavy Blade', '+3 Strength, -1 Speed.', amiibo),
-  skill('veteran_intuition', 'Veteran Intuition', '+15 Critical Evade in combat.', amiibo),
-  skill('aether', 'Aether', '(Skill × 0.5)% chance to land a Sol-effect hit followed by a Luna-effect hit.', amiibo),
-  skill('strengthtaker', 'Strengthtaker', '+2 Strength (up to +10) whenever the user defeats a foe, resetting each chapter.', amiibo),
+  // Also a Scroll-item reward (any character, any class) — unlike Dancing Blade/Charm/Dual Guarder above.
+  skill('speedtaker', 'Speedtaker', '+2 Speed (up to +10) whenever the user defeats a foe, resetting each chapter.', { ...amiibo, ...item }),
+  skill('heavy_blade', 'Heavy Blade', '+3 Strength, -1 Speed.', { ...amiibo, ...item }),
+  skill('veteran_intuition', 'Veteran Intuition', '+15 Critical Evade in combat.', { ...amiibo, ...item }),
+  skill('aether', 'Aether', '(Skill × 0.5)% chance to land a Sol-effect hit followed by a Luna-effect hit.', { ...amiibo, ...item }),
+  skill('strengthtaker', 'Strengthtaker', '+2 Strength (up to +10) whenever the user defeats a foe, resetting each chapter.', { ...amiibo, ...item }),
   skill('dual_striker', 'Dual Striker', 'As the support unit during a Tag Team Dual Strike, +3 damage.', amiibo),
   skill('awakening', 'Awakening', '+30 Hit rate, Avoid, Critical rate, and Critical Evade when the user’s HP is below half.', amiibo),
   skill('tactical_advice', 'Tactical Advice', 'As the support unit in a Pair Up, +10 Hit rate to the lead unit.', amiibo),
@@ -244,10 +246,10 @@ export const skills: Skill[] = [
   skill('ignis', 'Ignis', '(Skill)% chance to add half the Magic stat to Strength on a physical attack, or half the Strength stat to Magic on a magic attack.', amiibo),
   skill('rally_spectrum', 'Rally Spectrum', '+2 to all stats for one turn to all allies within 4 tiles via Rally.', amiibo),
 
-  // ---- Item-only skills (Amiibo-scan rewards) — not tied to any class, so unlike every skill
-  // above, these have no "source" class to show in the general pool. Strengthtaker/Speedtaker
-  // above are the same mechanic but already reachable as real class skills (Vanguard/Lodestar), so
-  // they're not repeated here — these five have no such class, only this item route. ----
+  // ---- Item-only skills (Amiibo-scan rewards) — not tied to any class at all, unlike
+  // Strengthtaker/Speedtaker/Heavy Blade/Veteran Intuition/Aether/Warp above, which also have a
+  // real class (or, for Warp, a DLC class) as an alternate source and so carry both flags instead
+  // of being defined a second time down here. ----
   skill('point_blank', 'Point Blank', 'User can attack enemies at 1 Range with a Bow.', item),
   skill('paragon', 'Paragon', 'Experience gained is doubled.', item),
   skill('magictaker', 'Magictaker', '+2 Magic (up to +10) whenever the user defeats a foe, resetting each chapter.', item),
