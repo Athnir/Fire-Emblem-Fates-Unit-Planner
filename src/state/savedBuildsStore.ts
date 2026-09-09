@@ -55,6 +55,13 @@ interface SavedBuildsState {
   loadBuildSet: (id: string) => BuildSet | undefined
   deleteBuildSet: (id: string) => void
   renameBuildSet: (id: string, name: string) => void
+  /** Merges `patch` into one saved BuildSet entry's own `data`, in place — lets the Team Viewer fix a
+   * flagged backpack conflict (or any other field) directly, without needing to reopen the source
+   * tab, reselect the unit, and re-save the whole set. Creates a new entry (just `patch` as its
+   * data) if this character has none yet in the set — e.g. assigning a backpack to a unit that's
+   * only in the paired Skill Set so far, with no Unit Set entry of their own. No-op if the set
+   * itself doesn't exist. */
+  patchBuildSetEntryData: (buildSetId: string, characterId: string, characterName: string, patch: Record<string, unknown>) => void
 }
 
 export const useSavedBuildsStore = create<SavedBuildsState>()(
@@ -133,6 +140,18 @@ export const useSavedBuildsStore = create<SavedBuildsState>()(
       renameBuildSet: (id, name) =>
         set((state) => ({
           buildSets: state.buildSets.map((b) => (b.id === id ? { ...b, name } : b)),
+        })),
+      patchBuildSetEntryData: (buildSetId, characterId, characterName, patch) =>
+        set((state) => ({
+          buildSets: state.buildSets.map((b) => {
+            if (b.id !== buildSetId) return b
+            const idx = b.entries.findIndex((e) => e.characterId === characterId)
+            const entries =
+              idx >= 0
+                ? b.entries.map((e, i) => (i === idx ? { ...e, data: { ...e.data, ...patch } } : e))
+                : [...b.entries, { characterId, characterName, data: patch }]
+            return { ...b, entries, updatedAt: Date.now() }
+          }),
         })),
     }),
     {

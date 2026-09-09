@@ -129,6 +129,13 @@ export function SkillPlanner() {
   const [poolSearch, setPoolSearch] = useState('')
   const [unlockedItemClassIds, setUnlockedItemClassIds] = useState<string[]>([])
   const [variableParentId, setVariableParentId] = useState('')
+  // Marks this unit as backpack-only for Team Viewer (exempt from front-unit counting, listed
+  // separately there) — set explicitly here rather than inferred from the loadout, since a pure
+  // backpack donor may have no real Unit Planner build to infer anything from at all. When checked,
+  // backpackClassId is which of their own classes they're giving that bonus as — Team Viewer uses
+  // this directly instead of guessing at their default class.
+  const [isBackpackUnit, setIsBackpackUnit] = useState(false)
+  const [backpackClassId, setBackpackClassId] = useState('')
 
   // Children are selectable too — Corrin can marry some of them, and children can marry each
   // other (barring siblings) — canMarry below still gates it on real S-support data either way.
@@ -373,6 +380,8 @@ export function SkillPlanner() {
     setUnlockedItemClassIds([])
     setLoadout([])
     setVariableParentId('')
+    setIsBackpackUnit(false)
+    setBackpackClassId('')
   }
 
   const currentBuildData = {
@@ -382,6 +391,8 @@ export function SkillPlanner() {
     loadout,
     unlockedItemClassIds,
     variableParentId,
+    isBackpackUnit,
+    backpackClassId,
   }
 
   function handleLoadEntry(entry: WorkingSetEntry) {
@@ -392,6 +403,8 @@ export function SkillPlanner() {
     setLoadout(Array.isArray(data.loadout) ? data.loadout : [])
     setUnlockedItemClassIds(Array.isArray(data.unlockedItemClassIds) ? data.unlockedItemClassIds : [])
     setVariableParentId(typeof data.variableParentId === 'string' ? data.variableParentId : '')
+    setIsBackpackUnit(Boolean(data.isBackpackUnit))
+    setBackpackClassId(typeof data.backpackClassId === 'string' ? data.backpackClassId : '')
   }
 
   return (
@@ -669,6 +682,33 @@ export function SkillPlanner() {
               </ul>
             )}
           </div>
+
+          <label className="flex items-center gap-2 text-xs text-neutral-300">
+            <input
+              type="checkbox"
+              checked={isBackpackUnit}
+              onChange={(e) => setIsBackpackUnit(e.target.checked)}
+            />
+            Backpack unit
+          </label>
+          {isBackpackUnit && classTree && (
+            <div className="flex flex-wrap gap-1.5">
+              {[...classTree.base, ...classTree.secondary, ...classTree.tertiary].map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => setBackpackClassId(c.id)}
+                  className={`rounded-md border px-2 py-1 text-xs transition-colors ${
+                    backpackClassId === c.id
+                      ? 'border-violet-500 bg-violet-950/50 text-violet-200'
+                      : 'border-neutral-700 bg-neutral-800 text-neutral-300 hover:border-neutral-600'
+                  }`}
+                >
+                  {c.name}
+                </button>
+              ))}
+            </div>
+          )}
 
           <div data-export-hide>
             <BuildSetManager

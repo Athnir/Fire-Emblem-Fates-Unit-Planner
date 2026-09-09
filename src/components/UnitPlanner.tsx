@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { characters, charactersById } from '../data/characters'
 import { earliestChapterFor, earliestChildLevel, FINAL_CHAPTER, levelForChapter } from '../data/childLeveling'
 import { classes as allClasses, classesById, classesByName } from '../data/classes'
-import { STAT_KEYS, type Character, type ClassData, type Route, type StatBlock } from '../data/types'
-import { childAvailableClasses, computeChild, fixedParentContribution } from '../logic/childCalculator'
+import { STAT_KEYS, type Character, type ClassData, type PairUpBonus, type Route, type StatBlock, type WeaponRank } from '../data/types'
+import { childAvailableClasses, computeChild, fixedParentContribution, resolveSecondGenParent } from '../logic/childCalculator'
 import { getFixedParent, isFamilyBlocked } from '../logic/childLookup'
 import { getClassLine, getOwnClassTree, isCorrinWithoutTalent, weaponRankBonus } from '../logic/classResolution'
 import { applyCorrinBuild, withCorrinBuild } from '../logic/corrinBuild'
@@ -20,14 +20,9 @@ import {
   type ClassSegment,
   type ClassSource,
 } from '../logic/multiClass'
-import {
-  combineChildEntry,
-  cumulativePairUpBonus,
-  resolveAdultOrCorrinEntry,
-  type Boon,
-  type RankBonus,
-} from '../data/pairUpCharacterBonus'
+import { cumulativePairUpBonus } from '../data/pairUpCharacterBonus'
 import { supports } from '../data/supports'
+import { resolveGivenEntry } from '../logic/pairUpResolution'
 import { useCorrinBuildStore, type CorrinBuild } from '../state/corrinBuildStore'
 import { usePlannerStore, type Pairing } from '../state/plannerStore'
 import type { WorkingSetEntry } from '../state/savedBuildsStore'
@@ -42,6 +37,27 @@ const COMBAT_BONUS_LABELS: Record<string, string> = { hit: 'Hit', avoid: 'Avoid'
 
 /** DLC (Scroll item) and Amiibo classes, in that order — not tied to any character's normal class set. */
 const ITEM_CLASSES = allClasses.filter((c) => c.isDlcClass || c.isAmiibo)
+
+/** What UnitDetail reports upward when rendered headless — the Team Viewer's per-character summary,
+ * covering the pieces of a final build that live in Unit Planner (final class/weapons/stats/backpack;
+ * skills are Skill Planner's own saved data, merged in separately by the viewer). */
+export interface UnitPlanComputedSummary {
+  characterId: string
+  className: string | undefined
+  weaponRanks: WeaponRank[] | undefined
+  /** This unit's own stat CAP in their final class (not a leveled estimate) — level-independent, so
+   * it doesn't depend on where the story chapter/target-level pickers happen to be set. */
+  maxStats: StatBlock | undefined
+  /** The final class's own movement stat (fixed by class, not level-dependent) — the two toggle-
+   * based bonuses (Movement +1 skill, Boots) aren't included since they're local-only, never saved. */
+  movement: number | undefined
+  /** This unit's own personal growth rate (blended with both parents if a child) — before any
+   * class's own growth-rate contribution, matching the plain "Growth %" display everywhere else. */
+  growthRates: StatBlock | undefined
+  backpackId: string | undefined
+  backpackName: string | undefined
+  pairUpBonus: PairUpBonus | undefined
+}
 
 function StatTable({
   title,
@@ -193,38 +209,6 @@ const PAIR_UP_RANKS = [
 type PairUpRank = (typeof PAIR_UP_RANKS)[number]['value']
 
 /**
- * Resolves any character's own Pair Up entry (C/B/A/S), recursing into their parents if they're a
- * child themselves — needed for the "given" bonus, since a child's entry isn't looked up anywhere,
- * it's assembled from their parents' (see combineChildEntry). Only ever recurses one extra level in
- * practice (a child's own parent can't itself be a second-gen child by the game's actual family
- * structure), but Kana specifically CAN have a second-gen child as their non-Corrin parent (the
- * "second-gen marriage" mechanic), which is exactly that one extra level — getVariableParentId
- * supplies whichever variable-parent selection applies to each level (the unit's own for the top
- * call, the nested child's own separately-selected spouse for the recursive call).
- */
-function resolveGivenEntry(
-  character: Character,
-  corrinBoon: Boon | null,
-  corrinBane: Boon | null,
-  getVariableParentId: (childId: string) => string | undefined,
-): RankBonus | undefined {
-  if (!character.isChild) {
-    return resolveAdultOrCorrinEntry(character.id, corrinBoon, corrinBane)
-  }
-  const fixedInfo = getFixedParent(character)
-  if (!fixedInfo) return undefined
-  const fixedChar = charactersById[fixedInfo.id]
-  const variableId = getVariableParentId(character.id)
-  const variableChar = variableId ? charactersById[variableId] : undefined
-  if (!fixedChar || !variableChar) return undefined
-  const father = fixedInfo.side === 'father' ? fixedChar : variableChar
-  const mother = fixedInfo.side === 'father' ? variableChar : fixedChar
-  const fatherEntry = resolveGivenEntry(father, corrinBoon, corrinBane, getVariableParentId)
-  const motherEntry = resolveGivenEntry(mother, corrinBoon, corrinBane, getVariableParentId)
-  return combineChildEntry(fatherEntry, motherEntry)
-}
-
-/**
  * Movement, weapon ranks, combat bonus, Aptitude growth toggle, and pair-up bonus for whichever
  * class this unit is currently in (their join/base class). "Given" pair-up bonus combines the
  * class-based layer (classData.pairUpBonus, always full regardless of rank) with the
@@ -242,6 +226,16 @@ function MechanicsSection({
   corrinBuild,
   familyOverrideIds,
   pairings,
+  pairUpRank,
+  pairUpPartnerId,
+  partnerVariableParentId,
+  partnerClassId,
+  onSelectRank,
+  onSelectPartner,
+  onPartnerVariableParentChange,
+  onPartnerClassChange,
+  onComputedSummary,
+  headless,
 }: {
   classData: ClassData | undefined
   statCaps?: StatBlock
@@ -260,26 +254,40 @@ function MechanicsSection({
    * in this file. */
   familyOverrideIds: string[]
   pairings: Pairing[]
+  /** "Backpack" state (who's paired up with ownCharacter, and at what rank/class) — owned by
+   * UnitDetail (not local state here) so it can be saved into the build snapshot like everything
+   * else, and read back out by the Team Viewer. */
+  pairUpRank: PairUpRank
+  pairUpPartnerId: string
+  partnerVariableParentId: string
+  partnerClassId: string
+  onSelectRank: (rank: PairUpRank) => void
+  onSelectPartner: (id: string) => void
+  onPartnerVariableParentChange: (id: string) => void
+  onPartnerClassChange: (id: string) => void
+  /** Reports the pair-up-adjusted numbers upward once resolved — the Team Viewer's headless batch
+   * rendering (see TeamViewer.tsx) collects these across a whole roster instead of duplicating this
+   * component's own partner/class resolution logic. */
+  onComputedSummary?: (summary: { backpackId: string | undefined; backpackName: string | undefined; pairUpBonus: PairUpBonus | undefined }) => void
+  /** Skips this component's own JSX once the effect above has reported — used only by the Team
+   * Viewer's hidden batch rendering. */
+  headless?: boolean
 }) {
   const [moveSkillOn, setMoveSkillOn] = useState(false)
   const [bootsOn, setBootsOn] = useState(false)
-  const [pairUpRank, setPairUpRank] = useState<PairUpRank>('none')
-  const [pairUpPartnerId, setPairUpPartnerId] = useState('')
-  const [partnerVariableParentId, setPartnerVariableParentId] = useState('')
-  const [partnerClassId, setPartnerClassId] = useState('')
   const [givenPairUpRank, setGivenPairUpRank] = useState<PairUpRank>('none')
 
   function selectRank(rank: PairUpRank) {
-    setPairUpRank(rank)
-    setPairUpPartnerId('')
-    setPartnerVariableParentId('')
-    setPartnerClassId('')
+    onSelectRank(rank)
+    onSelectPartner('')
+    onPartnerVariableParentChange('')
+    onPartnerClassChange('')
   }
 
   function selectPartner(id: string) {
-    setPairUpPartnerId(id)
-    setPartnerVariableParentId('')
-    setPartnerClassId('')
+    onSelectPartner(id)
+    onPartnerVariableParentChange('')
+    onPartnerClassChange('')
   }
 
   // Pair-up itself (the class-based stat bonus) needs no support at all — any adjacent unit on the
@@ -300,7 +308,9 @@ function MechanicsSection({
     })
   }, [ownCharacter, activeRoute, pairUpRank, familyOverrideIds, pairings])
 
-  const partner = pairUpPartnerId ? charactersById[pairUpPartnerId] : undefined
+  // Kana's own secondaryClass is a placeholder (see withCorrinBuild's comment) — a raw lookup here
+  // would resolve her backpack class/pair-up bonus off it instead of Corrin's real Talent.
+  const partner = pairUpPartnerId ? withCorrinBuild(charactersById[pairUpPartnerId], corrinBuild) : undefined
   // If the partner is a child, their available classes depend on their own fixed/variable parents
   // (same resolution as this unit's own detail below) rather than a plain class-set lookup.
   const partnerFixedInfo = partner?.isChild ? getFixedParent(partner) : undefined
@@ -334,6 +344,12 @@ function MechanicsSection({
   }, [partner, partnerFixedInfo, partnerFixedChar, partnerVariableChar, activeRoute])
   const partnerClass = partnerAvailableClasses.find((c) => c.id === partnerClassId) ?? partnerDefaultClass
 
+  useEffect(() => {
+    onComputedSummary?.({ backpackId: partner?.id, backpackName: partner?.name, pairUpBonus: partnerClass?.pairUpBonus })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [partner?.id, partner?.name, partnerClass])
+
+  if (headless) return null
   if (!classData) return null
 
   const movBonus = (moveSkillOn ? 1 : 0) + (bootsOn ? 2 : 0)
@@ -474,8 +490,8 @@ function MechanicsSection({
           <select
             value={partnerVariableParentId}
             onChange={(e) => {
-              setPartnerVariableParentId(e.target.value)
-              setPartnerClassId('')
+              onPartnerVariableParentChange(e.target.value)
+              onPartnerClassChange('')
             }}
             className="w-full max-w-sm rounded-md border border-neutral-700 bg-neutral-800 px-2 py-1 text-sm text-neutral-200"
           >
@@ -492,7 +508,7 @@ function MechanicsSection({
             <button
               key={c.id}
               type="button"
-              onClick={() => setPartnerClassId(c.id)}
+              onClick={() => onPartnerClassChange(c.id)}
               className={`rounded-md border px-2 py-1 text-xs transition-colors ${
                 (partnerClassId ? partnerClassId === c.id : partnerDefaultClass?.id === c.id)
                   ? 'border-violet-500 bg-violet-950/50 text-violet-200'
@@ -547,7 +563,7 @@ function MechanicsSection({
  * apply to both — including Projected Stats, previously adult-only since children's stat-cap
  * formula wasn't generalized to classes besides their own starting one.
  */
-function UnitDetail({
+export function UnitDetail({
   character: rawCharacter,
   activeRoute,
   corrinBuild,
@@ -555,6 +571,8 @@ function UnitDetail({
   onConsumePendingBuildData,
   onRequestLoadBuild,
   onSwitchRoute,
+  headless,
+  onComputedSummary,
 }: {
   character: Character
   activeRoute: Route
@@ -567,6 +585,11 @@ function UnitDetail({
   onConsumePendingBuildData: () => void
   onRequestLoadBuild: (entry: WorkingSetEntry) => void
   onSwitchRoute: (route: Route) => void
+  /** Skips the normal interactive JSX entirely, computing and reporting via onComputedSummary
+   * instead — used by the Team Viewer to batch-render a whole saved set's units off-screen and
+   * collect their final numbers without duplicating this component's own computation. */
+  headless?: boolean
+  onComputedSummary?: (summary: UnitPlanComputedSummary) => void
 }) {
   const isCorrin = rawCharacter.id === 'corrin_m' || rawCharacter.id === 'corrin_f'
   const character = isCorrin ? applyCorrinBuild(rawCharacter, corrinBuild) : rawCharacter
@@ -629,7 +652,18 @@ function UnitDetail({
     if (variableCharRaw && childId === variableCharRaw.id) return kanaSpouseVariableParentId || undefined
     return undefined
   }
-  const variableChar = variableParentId ? withCorrinBuild(charactersById[variableParentId], corrinBuild) : undefined
+  // If the Variable parent is itself a second-gen child (only reachable for Kana — see
+  // variableCandidates' own comment above), their raw baseStats/growthRates/maxStatModifiers are
+  // just this app's placeholder data for an un-recruited child — resolveSecondGenParent recursively
+  // blends their real values from THEIR OWN parents (via kanaSpouseVariableParentId) instead, and
+  // falls back to the raw placeholder unchanged if that selection hasn't been made yet.
+  const rawVariableChar = variableParentId ? withCorrinBuild(charactersById[variableParentId], corrinBuild) : undefined
+  const kanaSpouseVariableChar = kanaSpouseVariableParentId
+    ? withCorrinBuild(charactersById[kanaSpouseVariableParentId], corrinBuild)
+    : undefined
+  const variableChar = rawVariableChar
+    ? resolveSecondGenParent(rawVariableChar, kanaSpouseFixedInfo, kanaSpouseVariableChar)
+    : undefined
 
   const pairings = usePlannerStore((state) => state.pairings)
   // Only relevant once this unit's own Variable parent picker above has an actual selection (no
@@ -732,6 +766,21 @@ function UnitDetail({
   const isCorrinSelf = character.id === 'corrin_m' || character.id === 'corrin_f'
   const [ownSpouseId, setOwnSpouseId] = useState('')
   const [ownFriendId, setOwnFriendId] = useState('')
+
+  // "Backpack" — who's paired up WITH this unit, and at what rank/class — owned here (not inside
+  // MechanicsSection) so it's part of the saved build snapshot below, same as everything else on
+  // this page; MechanicsSection just renders/edits it via props now.
+  const [pairUpRank, setPairUpRank] = useState<PairUpRank>('none')
+  const [pairUpPartnerId, setPairUpPartnerId] = useState('')
+  const [partnerVariableParentId, setPartnerVariableParentId] = useState('')
+  const [partnerClassId, setPartnerClassId] = useState('')
+  // MechanicsSection reports the pair-up-adjusted numbers back up here via its own onComputedSummary
+  // prop, once its partner/class resolution settles — merged into this component's own summary below.
+  const [pairUpSummary, setPairUpSummary] = useState<{
+    backpackId: string | undefined
+    backpackName: string | undefined
+    pairUpBonus: PairUpBonus | undefined
+  }>({ backpackId: undefined, backpackName: undefined, pairUpBonus: undefined })
   // Family-blocked candidates are excluded here — real committed conflicts (isFamilyBlocked, per
   // the actual Marriage Planner plan) and, only relevant for Kana/Shigure, whoever this tab's own
   // Variable parent picker above currently reveals as a family conflict even with nothing committed
@@ -759,14 +808,19 @@ function UnitDetail({
   // only their Talent, and only via marriage or their own children, never friendship.
   const ownFriendEligible = useMemo(
     () =>
-      characters.filter(
-        (c) =>
-          c.id !== character.id &&
-          !(c.id === 'corrin_m' || c.id === 'corrin_f') &&
-          isRouteCompatible(c.route, activeRoute) &&
-          canFriendshipSeal(supports, character, c, activeRoute),
-      ),
-    [character, activeRoute],
+      characters
+        .filter(
+          (c) =>
+            c.id !== character.id &&
+            !(c.id === 'corrin_m' || c.id === 'corrin_f') &&
+            isRouteCompatible(c.route, activeRoute) &&
+            canFriendshipSeal(supports, character, c, activeRoute),
+        )
+        // Kana's own secondaryClass is a placeholder (see withCorrinBuild's comment) that only ever
+        // gets corrected here — a raw entry would grant whatever the placeholder happens to be
+        // instead of Corrin's real Talent whenever Kana is picked as someone's A+ friend.
+        .map((c) => withCorrinBuild(c, corrinBuild)),
+    [character, activeRoute, corrinBuild],
   )
   // The plain picker only ever shows ONE friendship class at a time (the one picked below) — same
   // as everyone else, Corrin included, so it doesn't flood. The multi-class pool is different (see
@@ -1107,6 +1161,10 @@ function UnitDetail({
     preSegments,
     promotedSegments,
     unlockedItemClassIds,
+    pairUpRank,
+    pairUpPartnerId,
+    partnerVariableParentId,
+    partnerClassId,
   }
 
   // Applying restore data as a plain function call (from BuildSetManager's onLoadEntry) wouldn't work
@@ -1136,8 +1194,60 @@ function UnitDetail({
     setPreSegments(Array.isArray(data.preSegments) ? (data.preSegments as ClassSegment[]) : [])
     setPromotedSegments(Array.isArray(data.promotedSegments) ? (data.promotedSegments as ClassSegment[]) : [])
     setUnlockedItemClassIds(Array.isArray(data.unlockedItemClassIds) ? (data.unlockedItemClassIds as string[]) : [])
+    setPairUpRank(data.pairUpRank === 'A' || data.pairUpRank === 'S' ? data.pairUpRank : 'none')
+    setPairUpPartnerId(typeof data.pairUpPartnerId === 'string' ? data.pairUpPartnerId : '')
+    setPartnerVariableParentId(typeof data.partnerVariableParentId === 'string' ? data.partnerVariableParentId : '')
+    setPartnerClassId(typeof data.partnerClassId === 'string' ? data.partnerClassId : '')
     onConsumePendingBuildData()
   }, [pendingBuildData])
+
+  // Reports the final build's Unit-Planner-owned pieces upward for the Team Viewer's batch rendering
+  // — headless instances have no other way out, and non-headless ones simply pass no callback.
+  useEffect(() => {
+    if (!onComputedSummary) return
+    const finalClass = finalMultiClassClass ?? selectedClass
+    onComputedSummary({
+      characterId: character.id,
+      className: finalClass?.name,
+      weaponRanks: finalClass?.weaponRanks,
+      maxStats: roughEstimateCaps,
+      movement: finalClass?.movement,
+      growthRates: effectiveGrowthRates,
+      backpackId: pairUpSummary.backpackId,
+      backpackName: pairUpSummary.backpackName,
+      pairUpBonus: pairUpSummary.pairUpBonus,
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [character.id, finalMultiClassClass, selectedClass, roughEstimateCaps, effectiveGrowthRates, pairUpSummary])
+
+  // MechanicsSection still needs to actually mount even in headless mode — it's the one that
+  // resolves the backpack's class and reports the pair-up bonus via its own onComputedSummary,
+  // which the effect above already folded into what this component just reported upward. Skipping
+  // straight to `return null` here would mean it never mounts at all, and that bonus never resolves.
+  if (headless) {
+    return (
+      <MechanicsSection
+        classData={selectedClass}
+        statCaps={displayedStatCaps}
+        ownCharacter={character}
+        getOwnVariableParentId={getOwnVariableParentId}
+        activeRoute={activeRoute}
+        corrinBuild={corrinBuild}
+        familyOverrideIds={familyOverrideIds}
+        pairings={pairings}
+        pairUpRank={pairUpRank}
+        pairUpPartnerId={pairUpPartnerId}
+        partnerVariableParentId={partnerVariableParentId}
+        partnerClassId={partnerClassId}
+        onSelectRank={setPairUpRank}
+        onSelectPartner={setPairUpPartnerId}
+        onPartnerVariableParentChange={setPartnerVariableParentId}
+        onPartnerClassChange={setPartnerClassId}
+        onComputedSummary={setPairUpSummary}
+        headless
+      />
+    )
+  }
 
   return (
     <div className="space-y-4 border-t border-neutral-800 pt-4">
@@ -1565,6 +1675,16 @@ function UnitDetail({
         corrinBuild={corrinBuild}
         familyOverrideIds={familyOverrideIds}
         pairings={pairings}
+        pairUpRank={pairUpRank}
+        pairUpPartnerId={pairUpPartnerId}
+        partnerVariableParentId={partnerVariableParentId}
+        partnerClassId={partnerClassId}
+        onSelectRank={setPairUpRank}
+        onSelectPartner={setPairUpPartnerId}
+        onPartnerVariableParentChange={setPartnerVariableParentId}
+        onPartnerClassChange={setPartnerClassId}
+        onComputedSummary={setPairUpSummary}
+        headless={headless}
       />
 
       {!character.isChild && (

@@ -1,3 +1,4 @@
+import { charactersById } from '../data/characters'
 import { classesByName } from '../data/classes'
 import { PARALLEL_CLASS_TABLE, type Character, type ClassData, type Route, type StatBlock } from '../data/types'
 import { correctGenderedClass, getClassLine } from './classResolution'
@@ -221,6 +222,43 @@ export function computeChild(input: ComputeChildInput): ComputedChild {
     inheritedClasses,
     hasDragonVeinAccess,
     hairSourceParentId,
+  }
+}
+
+/**
+ * A parent who is themselves a second-gen child (only reachable for Kana — see the "second-gen
+ * marriage" mechanic) has just this app's placeholder baseStats/growthRates/maxStatModifiers until
+ * THEIR OWN parents are resolved too — a raw lookup would silently contribute an empty placeholder
+ * instead of their real blended values. `ownVariableParentId` is whichever unit was picked as this
+ * specific parent's own non-fixed side (their own "Variable parent" selection); returns the parent
+ * unchanged if they're not a child, or if that selection hasn't been made yet (same "can't resolve
+ * without both sides" fallback as everywhere else). Level 20 is an approximation — there's no real
+ * "recruitment level" for a hypothetical grandparent pairing to anchor to, same as every other
+ * "current stats" proxy already used for parent slots throughout this app.
+ */
+export function resolveSecondGenParent(
+  rawParent: Character,
+  fixedInfo: { id: string; side: ParentSide } | undefined,
+  ownVariableParent: Character | undefined,
+): Character {
+  if (!rawParent.isChild || !fixedInfo || !ownVariableParent) return rawParent
+  const fixedChar = charactersById[fixedInfo.id]
+  if (!fixedChar) return rawParent
+  const father = fixedInfo.side === 'father' ? fixedChar : ownVariableParent
+  const mother = fixedInfo.side === 'father' ? ownVariableParent : fixedChar
+  const resolved = computeChild({
+    child: rawParent,
+    father,
+    mother,
+    fatherCurrentStats: father.baseStats,
+    motherCurrentStats: mother.baseStats,
+    level: 20,
+  })
+  return {
+    ...rawParent,
+    baseStats: resolved.baseStats,
+    growthRates: resolved.growthRates,
+    maxStatModifiers: resolved.maxStatModifiers,
   }
 }
 

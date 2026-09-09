@@ -8,11 +8,12 @@ import { IosInstallBanner } from './components/IosInstallBanner'
 import { MarriagePlanner } from './components/MarriagePlanner'
 import { RosterBrowser } from './components/RosterBrowser'
 import { RouteBackground } from './components/RouteBackground'
+import { BulkViewer } from './components/BulkViewer'
 import { SkillPlanner } from './components/SkillPlanner'
 import { UnitPlanner } from './components/UnitPlanner'
 import { usePlannerStore } from './state/plannerStore'
 
-export type Tab = 'roster' | 'unit' | 'planner' | 'skills'
+export type Tab = 'roster' | 'unit' | 'planner' | 'skills' | 'viewer'
 
 function App() {
   const [tab, setTab] = useState<Tab>('roster')
@@ -54,7 +55,7 @@ function App() {
             )}
           </div>
         </div>
-        <nav className="mt-3 flex gap-2">
+        <nav className="mt-3 flex flex-wrap gap-2">
           <button
             type="button"
             onClick={() => setTab('roster')}
@@ -91,6 +92,15 @@ function App() {
           >
             Skill Planner
           </button>
+          <button
+            type="button"
+            onClick={() => setTab('viewer')}
+            className={`rounded-md px-3 py-1.5 text-sm font-medium ${
+              tab === 'viewer' ? 'bg-violet-600 text-white' : 'bg-neutral-800 text-neutral-300'
+            }`}
+          >
+            Bulk Viewer
+          </button>
         </nav>
         {editModeEnabled && (
           <p className="mt-2 text-xs text-amber-400">
@@ -108,6 +118,7 @@ function App() {
         {tab === 'unit' && <UnitPlanner />}
         {tab === 'planner' && <MarriagePlanner />}
         {tab === 'skills' && <SkillPlanner />}
+        {tab === 'viewer' && <BulkViewer />}
       </main>
     </div>
   )
