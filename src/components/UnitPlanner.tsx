@@ -1331,9 +1331,17 @@ export function UnitDetail({
     return projectSegments(postBump, effectiveGrowthRates, effectiveMaxStatModifiers, validPromotedSegments)
   })()
   const displayedProjection = multiClassResult ?? projected
-  // Always the real sum of both phases' actual segment levels — never an inflated/hardcoded number,
-  // so there's no "ghost" level counted that doesn't have real growth behind it.
-  const displayedFinalLevel = multiClassOn ? startLevel + preLevelsUsed + promotedLevelsUsed : targetLevelClamped
+  // A real promotion resets the in-game level counter to 1 (see promotedStartLevel/"resets to 1 at
+  // promotion" above) — so once any promoted-phase segment is planned, the displayed level is just
+  // that phase's own count, not a running total across both phases (which would double-count the
+  // pre-promotion levels the promoted tier never actually carries forward). Characters with no real
+  // pre-promotion phase at all (is40Level, joins-promoted) never have preLevelsUsed > 0 in the first
+  // place, so this always reduces to their own single continuous count either way.
+  const displayedFinalLevel = multiClassOn
+    ? canMultiClassPromote && promotedLevelsUsed === 0
+      ? startLevel + preLevelsUsed
+      : promotedStartLevel + promotedLevelsUsed
+    : targetLevelClamped
   // The "rough estimate" cap comparison (which numbers render green, i.e. "at cap") needs to match
   // whichever class the segment chain actually ends in — not the plain top picker's browsing
   // selection, which is commonly left on the character's ORIGINAL class the whole time multi-classing

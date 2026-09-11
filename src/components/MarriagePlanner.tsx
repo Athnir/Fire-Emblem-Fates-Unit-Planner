@@ -42,11 +42,24 @@ export function MarriagePlanner() {
     return () => setUnitLabel('')
   }, [primary, spouse, setUnitLabel])
 
-  // Primary is always the full roster — it's the starting point, so there's nothing to narrow it
-  // by yet. Spouse is entirely dependent on Primary: blank until Primary is picked, then narrowed
-  // to only who Primary can actually marry (excluding anyone the plan already reveals to be a
-  // parent/sibling of Primary).
-  const optionsForPrimary = participants
+  // Primary is the full roster of real "fixed parent" candidates — everyone minus two groups that
+  // only ever clutter this list instead of being a useful starting point:
+  //  - Children (Ophelia, Forrest, etc.): they only ever marry each other (which finds no child at
+  //    all — nobody's a fixed parent for a nonexistent third generation) or Corrin (which only ever
+  //    finds Kana, already reachable by picking Corrin as Primary instead). Always excluded.
+  //  - Adults whose only real marriage option is Corrin (Fuga, Anna, Gunter, ...) — picking one of
+  //    them first would only ever lead to pairing with Corrin anyway; picking Corrin as Primary
+  //    already surfaces them naturally in the Spouse list below.
+  // Corrin themselves are always kept regardless of their own match count. Spouse is entirely
+  // dependent on Primary: blank until Primary is picked, then narrowed to only who Primary can
+  // actually marry (excluding anyone the plan already reveals to be a parent/sibling of Primary).
+  const isCorrinId = (id: string) => id === 'corrin_m' || id === 'corrin_f'
+  const optionsForPrimary = participants.filter((c) => {
+    if (c.isChild) return false
+    if (isCorrinId(c.id)) return true
+    const marriageOptions = participants.filter((o) => o.id !== c.id && canMarry(supports, c, o, activeRoute))
+    return !(marriageOptions.length > 0 && marriageOptions.every((o) => isCorrinId(o.id)))
+  })
   const optionsForSpouse = primary
     ? participants.filter(
         (c) => c.id !== primary.id && canMarry(supports, primary, c, activeRoute) && !isFamilyBlocked(primary, c, pairings),
