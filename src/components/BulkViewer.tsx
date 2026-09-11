@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { characters, charactersById } from '../data/characters'
 import { classesById } from '../data/classes'
 import { skillsById } from '../data/skills'
-import { STAT_KEYS, type PairUpBonus, type StatBlock } from '../data/types'
+import { STAT_KEYS, type PairUpBonus, type Route, type StatBlock } from '../data/types'
 import { isRouteCompatible } from '../logic/eligibility'
 import { classStatCap } from '../logic/levelProjection'
 import { useCorrinBuildStore } from '../state/corrinBuildStore'
@@ -51,6 +51,75 @@ function StatGrid({ values, movement }: { values: StatBlock; movement?: number }
         </span>
       )}
     </div>
+  )
+}
+
+/** Module-scope (not defined inside TeamViewerPanel) is load-bearing here, not just style — a
+ * component defined inside another component's render gets a brand-new identity every render,
+ * which forces React to unmount/remount its <select> on every re-render (including the very
+ * frequent ones from the headless UnitDetail summaries updating), interrupting a click mid-select
+ * and making the dropdown feel broken/unresponsive. All the data it needs comes in as props instead
+ * of closing over TeamViewerPanel's locals, for exactly that reason. */
+function BackpackPicker({
+  id,
+  backpackId,
+  overCap,
+  route,
+  onChange,
+}: {
+  id: string
+  backpackId: string
+  overCap: boolean
+  route: Route | undefined
+  onChange: (characterId: string, newBackpackId: string) => void
+}) {
+  if (!route) return <span className="text-neutral-600">—</span>
+  return (
+    <>
+      <select
+        value={backpackId}
+        onChange={(e) => onChange(id, e.target.value)}
+        className={`w-full max-w-[10rem] rounded-md border bg-neutral-800 px-2 py-1 text-xs text-neutral-200 ${
+          overCap ? 'border-red-500' : 'border-neutral-700'
+        }`}
+      >
+        <option value="">(none)</option>
+        {characters
+          .filter((c) => isRouteCompatible(c.route, route))
+          .map((c) => (
+            <option key={c.id} value={c.id}>{c.name}</option>
+          ))}
+      </select>
+      {overCap && <p className="mt-1 text-xs text-amber-400">Too many {charactersById[id]?.name ?? id}.</p>}
+    </>
+  )
+}
+
+/** Same reasoning as BackpackPicker above — module scope, not nested, to keep the <select> stable
+ * across TeamViewerPanel's re-renders. */
+function BackpackClassPicker({
+  id,
+  options,
+  pickedClassId,
+  onChange,
+}: {
+  id: string
+  options: { id: string; name: string }[]
+  pickedClassId: string
+  onChange: (characterId: string, classId: string) => void
+}) {
+  if (options.length === 0) return <span className="text-neutral-600">—</span>
+  return (
+    <select
+      value={pickedClassId}
+      onChange={(e) => onChange(id, e.target.value)}
+      className="w-full max-w-[10rem] rounded-md border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs text-neutral-200"
+    >
+      <option value="">(pick a class)</option>
+      {options.map((c) => (
+        <option key={c.id} value={c.id}>{c.name}</option>
+      ))}
+    </select>
   )
 }
 
@@ -229,36 +298,19 @@ function TeamViewerPanel() {
     return { character, summary, skillIds, adjusted, growthRates, overCap, backpackId }
   }
 
-  function BackpackPicker({ id, backpackId, overCap }: { id: string; backpackId: string; overCap: boolean }) {
-    if (!unitSet) return <span className="text-neutral-600">—</span>
-    return (
-      <>
-        <select
-          value={backpackId}
-          onChange={(e) => handleReassignBackpack(id, e.target.value)}
-          className={`w-full max-w-[10rem] rounded-md border bg-neutral-800 px-2 py-1 text-xs text-neutral-200 ${
-            overCap ? 'border-red-500' : 'border-neutral-700'
-          }`}
-        >
-          <option value="">(none)</option>
-          {characters
-            .filter((c) => isRouteCompatible(c.route, unitSet.route))
-            .map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-        </select>
-        {overCap && <p className="mt-1 text-xs text-amber-400">Too many {charactersById[id]?.name ?? id}.</p>}
-      </>
-    )
-  }
-
   function renderRow(id: string) {
     const { character, summary, skillIds, adjusted, growthRates, overCap, backpackId } = getMainRowData(id)
     return (
       <tr key={id} className="border-b border-neutral-800/60 align-top last:border-0">
         <td className="px-3 py-2 font-medium text-neutral-200">{character?.name ?? id}</td>
         <td className="px-3 py-2">
-          <BackpackPicker id={id} backpackId={backpackId} overCap={overCap} />
+          <BackpackPicker
+            id={id}
+            backpackId={backpackId}
+            overCap={overCap}
+            route={unitSet?.route}
+            onChange={handleReassignBackpack}
+          />
         </td>
         <td className="px-3 py-2 text-neutral-300">{summary?.className ?? '—'}</td>
         <td className="px-3 py-2 text-neutral-300">
@@ -280,7 +332,13 @@ function TeamViewerPanel() {
         <div className="font-medium text-neutral-200">{character?.name ?? id}</div>
         <div>
           <div className="mb-1 text-xs uppercase tracking-wide text-neutral-500">Backpack</div>
-          <BackpackPicker id={id} backpackId={backpackId} overCap={overCap} />
+          <BackpackPicker
+            id={id}
+            backpackId={backpackId}
+            overCap={overCap}
+            route={unitSet?.route}
+            onChange={handleReassignBackpack}
+          />
         </div>
         <div className="text-sm text-neutral-300">
           <span className="text-neutral-500">Class: </span>{summary?.className ?? '—'}
@@ -354,26 +412,6 @@ function TeamViewerPanel() {
     return { character, skillIds, options, pickedClassId, pickedClass, overCap }
   }
 
-  function BackpackClassPicker({ id, options, pickedClassId }: {
-    id: string
-    options: { id: string; name: string }[]
-    pickedClassId: string
-  }) {
-    if (options.length === 0) return <span className="text-neutral-600">—</span>
-    return (
-      <select
-        value={pickedClassId}
-        onChange={(e) => handleBackpackClassChange(id, e.target.value)}
-        className="w-full max-w-[10rem] rounded-md border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs text-neutral-200"
-      >
-        <option value="">(pick a class)</option>
-        {options.map((c) => (
-          <option key={c.id} value={c.id}>{c.name}</option>
-        ))}
-      </select>
-    )
-  }
-
   function renderBackpackRow(id: string) {
     const { character, skillIds, options, pickedClassId, pickedClass, overCap } = getBackpackRowData(id)
     return (
@@ -383,7 +421,12 @@ function TeamViewerPanel() {
           {overCap && <p className="mt-1 text-xs text-amber-400">Used as backpack too many times.</p>}
         </td>
         <td className="px-3 py-2">
-          <BackpackClassPicker id={id} options={options} pickedClassId={pickedClassId} />
+          <BackpackClassPicker
+            id={id}
+            options={options}
+            pickedClassId={pickedClassId}
+            onChange={handleBackpackClassChange}
+          />
         </td>
         <td className="px-3 py-2 text-neutral-300">
           {pickedClass?.weaponRanks?.length ? pickedClass.weaponRanks.map((w) => `${w.type} ${w.rank}`).join(', ') : '—'}
@@ -403,7 +446,12 @@ function TeamViewerPanel() {
         </div>
         <div>
           <div className="mb-1 text-xs uppercase tracking-wide text-neutral-500">Class</div>
-          <BackpackClassPicker id={id} options={options} pickedClassId={pickedClassId} />
+          <BackpackClassPicker
+            id={id}
+            options={options}
+            pickedClassId={pickedClassId}
+            onChange={handleBackpackClassChange}
+          />
         </div>
         <div className="text-sm text-neutral-300">
           <span className="text-neutral-500">Weapons: </span>

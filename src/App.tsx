@@ -5,6 +5,7 @@ import { CorrinBuildPanel } from './components/CorrinBuildPanel'
 import { EditModeToggle } from './components/EditModeToggle'
 import { ExportImageButton } from './components/ExportImageButton'
 import { IosInstallBanner } from './components/IosInstallBanner'
+import { LocalDataWarningBanner } from './components/LocalDataWarningBanner'
 import { MarriagePlanner } from './components/MarriagePlanner'
 import { RosterBrowser } from './components/RosterBrowser'
 import { RouteBackground } from './components/RouteBackground'
@@ -36,6 +37,7 @@ function App() {
       }`}
     >
       <RouteBackground route={activeRoute} />
+      <LocalDataWarningBanner />
       <IosInstallBanner />
       <header className="border-b border-neutral-800/80 bg-neutral-950/90 px-6 py-4 backdrop-blur-sm">
         <div className="flex flex-wrap items-center justify-between gap-3">
