@@ -11,6 +11,7 @@ import { canFriendshipSeal, canMarry, canProduceChild, canSupport, isRouteCompat
 import { classGrowthRate, classStatCap, classStatDelta, getStartingLevel, projectStats } from '../logic/levelProjection'
 import {
   baseClassPool,
+  fixedLevelClassPool,
   friendshipClassSources,
   fullClassPool,
   marriageClassSources,
@@ -176,7 +177,7 @@ function LevelsInput({
  * just this row) — used both to cap the per-row input and to disable "Add" once exhausted.
  */
 function SegmentEditor({
-  pool,
+  getPool,
   segments,
   onAdd,
   onUpdate,
@@ -184,7 +185,12 @@ function SegmentEditor({
   cap,
   used,
 }: {
-  pool: ClassOption[]
+  /** Options available for the segment AT this index (0-based) — for a normal character this
+   * ignores the index and always returns the same flat pool, but a 40-level character's segments
+   * are gated by cumulative position (their own 40-level class always available, marriage/
+   * friendship classes' base vs. promoted tier split at the level-20 boundary — see
+   * poolForCumulativeStart where this is built). */
+  getPool: (index: number) => ClassOption[]
   segments: ClassSegment[]
   onAdd: () => void
   onUpdate: (id: string, patch: Partial<ClassSegment>) => void
@@ -199,7 +205,8 @@ function SegmentEditor({
         {used} / {cap} levels planned
       </div>
       <div className="space-y-1.5">
-        {segments.map((seg) => {
+        {segments.map((seg, i) => {
+          const pool = getPool(i)
           const option = pool.find((o) => o.classData.id === seg.classId)
           const rowMax = Math.max(1, seg.levels + remaining)
           return (
@@ -239,7 +246,7 @@ function SegmentEditor({
       <button
         type="button"
         onClick={onAdd}
-        disabled={pool.length === 0 || remaining <= 0}
+        disabled={getPool(segments.length).length === 0 || remaining <= 0}
         className="rounded-md border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs text-neutral-300 transition-colors hover:border-neutral-600 disabled:opacity-40"
       >
         + Add class segment
@@ -1091,15 +1098,31 @@ export function UnitDetail({
     ...marriageClassSources(character, ownSpouse),
     ...friendshipSourcesForMultiClass,
   ]
-  const preClassPool = baseClassPool(classSources, activeRoute)
+  function mergePools(...pools: ClassOption[][]): ClassOption[] {
+    const byId = new Map<string, ClassOption>()
+    pools.flat().forEach((o) => byId.set(o.classData.id, o))
+    return Array.from(byId.values())
+  }
+  // DLC/Amiibo classes are reachable via their own special seal item regardless of a unit's current
+  // tier or promotion status — unlike Master Seal (bound to a unit's normal class tree, gated by
+  // promotion the same as any other promoted-tier class), so once unlocked they belong in EVERY
+  // multi-class pool, pre-promotion included, not just after. They're always is40LevelClass classes
+  // too, so they get the same source label style as any other pairing source.
+  const unlockedItemClassOptions: ClassOption[] = unlockedItemClasses.map((c) => ({
+    classData: c,
+    sourceLabel: c.isAmiibo ? 'Amiibo' : 'DLC',
+  }))
+  const preClassPool = mergePools(baseClassPool(classSources, activeRoute), unlockedItemClassOptions)
   // An is40Level character (Songstress, DLC/Amiibo classes) has no real base/promoted split — their
   // entire segment range routes through this "promoted" pool alone (canMultiClassPromote is false
   // for them, below), so it needs each source's OWN tier too, not just promotions past it — see
   // fullClassPool's own comment for why promotedClassPool alone would silently drop it.
-  const promotedClassPoolOptions =
+  const promotedClassPoolOptions = mergePools(
     originalClass?.classSkills.length === 4
       ? fullClassPool(classSources, activeRoute)
-      : promotedClassPool(classSources, activeRoute)
+      : promotedClassPool(classSources, activeRoute),
+    unlockedItemClassOptions,
+  )
 
   const segmentIdRef = useRef(0)
   function addSegment(pool: ClassOption[], remaining: number, setSegments: (fn: (prev: ClassSegment[]) => ClassSegment[]) => void) {
@@ -1166,9 +1189,72 @@ export function UnitDetail({
 
   const [promotedSegments, setPromotedSegments] = useState<ClassSegment[]>([])
   const promotedStartLevel = canMultiClassPromote ? 1 : startLevel
-  const promotedLevelsCap = Math.max(0, (eternalSeal ? 99 : 20) - promotedStartLevel)
+  // A 40-level class's own non-Eternal-Seal ceiling is 40, not the normal promoted tier's 20 — same
+  // cap the plain single-class flow already uses for these (see targetLevelOptions above).
+  const promotedLevelsCap = Math.max(0, (eternalSeal ? 99 : originalIs40Level ? 40 : 20) - promotedStartLevel)
   const promotedLevelsUsed = promotedSegments.reduce((sum, s) => sum + s.levels, 0)
   const validPromotedSegments = resolveSegments(promotedSegments, promotedClassPoolOptions)
+
+  // A 40-level character's own class(es) (Songstress, any DLC/Amiibo) have no base/promoted split at
+  // all, so they stay available for every segment regardless of position — but their OTHER sources
+  // (marriage/friendship) still follow the normal rule: base tier only within the first 20 cumulative
+  // levels, promoted tier only past that, same as any other character's own promotion gate. Only
+  // meaningful for is40Level characters; the "pre" editor above already only ever shows base-tier
+  // options with no further gating needed, so this is purely for the "promoted" editor below.
+  const fixedLevelPool = originalIs40Level
+    ? mergePools(fixedLevelClassPool(classSources, activeRoute), unlockedItemClassOptions)
+    : []
+  const PROMOTION_GATE_LEVEL = 20
+  function poolForCumulativeStart(cumulativeStart: number): ClassOption[] {
+    const tierPool = cumulativeStart < PROMOTION_GATE_LEVEL ? preClassPool : promotedClassPool(classSources, activeRoute)
+    return mergePools(fixedLevelPool, tierPool)
+  }
+  function is40LevelPoolForIndex(index: number): ClassOption[] {
+    const cumulativeStart = promotedStartLevel + promotedSegments.slice(0, index).reduce((sum, s) => sum + s.levels, 0)
+    return poolForCumulativeStart(cumulativeStart)
+  }
+  function addIs40LevelSegment() {
+    const cumulativeStart = promotedStartLevel + promotedSegments.reduce((sum, s) => sum + s.levels, 0)
+    const pool = poolForCumulativeStart(cumulativeStart)
+    const remaining = promotedLevelsCap - promotedLevelsUsed
+    if (pool.length === 0 || remaining <= 0) return
+    const id = `seg-${segmentIdRef.current++}`
+    setPromotedSegments((prev) => [...prev, { id, classId: pool[0].classData.id, levels: Math.min(1, remaining) }])
+  }
+  // Growing a segment's levels past the point where it would cross the level-20 gate splits it in
+  // two instead of just letting it silently span both tiers — the part before the gate keeps its
+  // current class, the new part after it defaults to the post-gate pool's first option (or the same
+  // class, if that class is one of the ones that stays available on both sides, e.g. Songstress).
+  function updatePromotedSegment(id: string, patch: Partial<ClassSegment>) {
+    if (!originalIs40Level || patch.levels === undefined) {
+      updateSegment(setPromotedSegments, id, patch)
+      return
+    }
+    setPromotedSegments((prev) => {
+      const index = prev.findIndex((s) => s.id === id)
+      if (index === -1) return prev
+      const cumulativeStart = promotedStartLevel + prev.slice(0, index).reduce((sum, s) => sum + s.levels, 0)
+      const newLevels = patch.levels as number
+      // A tier-independent class (Songstress) doesn't care about the gate at all — no need to split
+      // a segment that's already using one of those just because it happens to span level 20.
+      const currentIsTierIndependent = fixedLevelPool.some((o) => o.classData.id === prev[index].classId)
+      const crossesGate = cumulativeStart < PROMOTION_GATE_LEVEL && cumulativeStart + newLevels > PROMOTION_GATE_LEVEL
+      if (currentIsTierIndependent || !crossesGate) {
+        const next = [...prev]
+        next[index] = { ...next[index], ...patch }
+        return next
+      }
+      const firstPartLevels = PROMOTION_GATE_LEVEL - cumulativeStart
+      const remainderLevels = newLevels - firstPartLevels
+      const afterPool = poolForCumulativeStart(PROMOTION_GATE_LEVEL)
+      const currentClassStillValid = afterPool.some((o) => o.classData.id === prev[index].classId)
+      const remainderClassId = currentClassStillValid ? prev[index].classId : (afterPool[0]?.classData.id ?? prev[index].classId)
+      const next = [...prev]
+      next[index] = { ...next[index], levels: firstPartLevels }
+      next.splice(index + 1, 0, { id: `seg-${segmentIdRef.current++}`, classId: remainderClassId, levels: remainderLevels })
+      return next
+    })
+  }
 
   // Narrates AND computes what the free Offspring Seal assumes, as two non-editable rows at the top
   // of Projected Stats: full levels in the child's own starting class up to the base cap (20), then
@@ -1711,7 +1797,7 @@ export function UnitDetail({
                 Up to level {earlyPromote ? promotionLevelClamped : 20} total, starting from {character.name}'s join level ({startLevel}).
               </p>
               <SegmentEditor
-                pool={preClassPool}
+                getPool={() => preClassPool}
                 segments={preSegments}
                 onAdd={() => addSegment(preClassPool, preLevelsCap - preLevelsUsed, setPreSegments)}
                 onUpdate={(id, patch) => updateSegment(setPreSegments, id, patch)}
@@ -1764,14 +1850,18 @@ export function UnitDetail({
               {multiClassOn && promotedPhaseUnlocked && (
                 <>
                   <p className="text-xs text-neutral-500">
-                    Up to level {eternalSeal ? 99 : 20} total, starting from level {promotedStartLevel}
+                    Up to level {eternalSeal ? 99 : originalIs40Level ? 40 : 20} total, starting from level {promotedStartLevel}
                     {canMultiClassPromote ? ' (resets to 1 at promotion)' : ''}.
                   </p>
                   <SegmentEditor
-                    pool={promotedClassPoolOptions}
+                    getPool={originalIs40Level ? is40LevelPoolForIndex : () => promotedClassPoolOptions}
                     segments={promotedSegments}
-                    onAdd={() => addSegment(promotedClassPoolOptions, promotedLevelsCap - promotedLevelsUsed, setPromotedSegments)}
-                    onUpdate={(id, patch) => updateSegment(setPromotedSegments, id, patch)}
+                    onAdd={
+                      originalIs40Level
+                        ? addIs40LevelSegment
+                        : () => addSegment(promotedClassPoolOptions, promotedLevelsCap - promotedLevelsUsed, setPromotedSegments)
+                    }
+                    onUpdate={updatePromotedSegment}
                     onRemove={(id) => removeSegment(setPromotedSegments, id)}
                     cap={promotedLevelsCap}
                     used={promotedLevelsUsed}

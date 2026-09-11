@@ -95,6 +95,16 @@ export function fullClassPool(sources: ClassSource[], route: Route): ClassOption
   return dedupedPool(sources, route, (line) => line)
 }
 
+/** Every 40-level class (classSkills.length === 4 — Songstress, or any DLC/Amiibo class) reachable
+ * through any of the given sources — these have no base/promoted split of their own, so unlike a
+ * normal source's line they should stay available at EVERY level within a 40-level character's
+ * segment plan, not just before or after the level-20 boundary that still gates their OTHER
+ * (non-40-level) sources' base vs. promoted tiers. Meant to be merged into whichever tier pool
+ * currently applies at a given segment's position — see poolForCumulativeStart in UnitPlanner.tsx. */
+export function fixedLevelClassPool(sources: ClassSource[], route: Route): ClassOption[] {
+  return dedupedPool(sources, route, (line) => line.filter((c) => c.classSkills.length === 4))
+}
+
 export interface ClassSegment {
   id: string
   classId: string
