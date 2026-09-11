@@ -2,8 +2,11 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/png" href="/icons/icon-192.png" />
-    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <!-- "-v2" suffix: see vite.config.ts's manifest.icons comment — a same-named icon fix can get
+         stuck behind Chrome's own server-side WebAPK-minting cache indefinitely; a new filename is
+         the only way to guarantee a real cache miss there instead of maybe getting lucky. -->
+    <link rel="icon" type="image/png" href="/icons/icon-192-v2.png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon-v2.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Fates Unit Planner</title>
     <style>

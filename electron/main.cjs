@@ -60,7 +60,7 @@ async function createWindow() {
     width: 1280,
     height: 900,
     title: 'Fates Unit Planner',
-    icon: path.join(DIST_DIR, 'icons', 'icon-512.png'),
+    icon: path.join(DIST_DIR, 'icons', 'icon-512-v2.png'),
     autoHideMenuBar: true,
   })
   // index.html's own <title> otherwise overwrites the BrowserWindow title above as soon as the

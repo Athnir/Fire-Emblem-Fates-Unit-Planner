@@ -58,9 +58,18 @@ export default defineConfig(() => ({
         // relative URLs against the manifest file's OWN location, which already sits at whatever
         // the configured base is (domain root normally, a sub-path on GitHub Pages), so this way
         // the icons resolve correctly either way without needing to know `base` here too.
+        // The "-v2" suffix on the "any"-purpose icons is load-bearing, not cosmetic: Chrome's
+        // Android install flow bakes the icon into a signed package via a Google server that keeps
+        // its OWN cache of the manifest/icon, entirely separate from this phone or GitHub's own CDN
+        // — clearing local site data and reinstalling can't touch that cache at all. A same-named
+        // fix (as the original icon-192.png/icon-512.png/apple-touch-icon.png swap was) can sit
+        // stuck behind it indefinitely. A brand-new filename is the only way to guarantee every
+        // cache layer (phone, CDN, and that minting server) sees a real cache miss instead of maybe
+        // getting lucky. Bump the suffix again (v3, v4, ...) if the actual artwork ever changes
+        // again — reusing an already-fixed name defeats the entire point.
         icons: [
-          { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
-          { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          { src: 'icons/icon-192-v2.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: 'icons/icon-512-v2.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
           { src: 'icons/icon-maskable-192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
           { src: 'icons/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],

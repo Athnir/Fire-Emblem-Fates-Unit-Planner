@@ -48,7 +48,7 @@
     ],
     "win": {
       "target": "portable",
-      "icon": "public/icons/icon-512.png"
+      "icon": "public/icons/icon-512-v2.png"
     }
   }
 }
