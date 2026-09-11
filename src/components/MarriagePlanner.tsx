@@ -2,18 +2,28 @@ import { useEffect, useMemo, useState } from 'react'
 import { characters, charactersById } from '../data/characters'
 import { supports } from '../data/supports'
 import { canMarry, canProduceChild, isRouteCompatible, isSameSexPairing } from '../logic/eligibility'
-import { assignParentRoles, findChildrenForPair, isFamilyBlocked } from '../logic/childLookup'
+import { assignParentRoles, findChildrenForPair, getFixedParent, isFamilyBlocked } from '../logic/childLookup'
 import { computeChild } from '../logic/childCalculator'
 import { earliestChildLevel } from '../data/childLeveling'
 import { withCorrinBuild } from '../logic/corrinBuild'
 import { useCorrinBuildStore } from '../state/corrinBuildStore'
-import { isCharacterAssigned, usePlannerStore } from '../state/plannerStore'
+import { usePlannerStore } from '../state/plannerStore'
 import { useScreenshotContextStore } from '../state/screenshotContextStore'
 import { ChildResultCard } from './ChildResultCard'
 import { PlanManager } from './PlanManager'
 import { RouteFilter } from './RouteFilter'
 
 const childCandidates = characters.filter((c) => c.isChild)
+// Every child has exactly one FIXED parent (see getFixedParent) — the character whose face/stats
+// the child is actually built from, and the only side of a pairing that determines WHICH child
+// results. Everyone else (mothers besides Azura, Corrin-exclusive recruits like Fuga/Anna, plain
+// same-sex-only supports, children themselves) is only ever a "variable" spouse — a valid Spouse
+// pick once some fixed parent is chosen as Primary, but never a useful starting point on their
+// own. Naturally includes Azura (Shigure's fixed mother) and both Corrin genders (Kana's fixed
+// parent) without any special-casing, since they're genuinely fixed parents too.
+const fixedParentIds = new Set(
+  childCandidates.map((c) => getFixedParent(c)?.id).filter((id): id is string => Boolean(id)),
+)
 
 export function MarriagePlanner() {
   const activeRoute = usePlannerStore((state) => state.activeRoute)
@@ -25,8 +35,9 @@ export function MarriagePlanner() {
   const [primaryId, setPrimaryId] = useState('')
   const [spouseId, setSpouseId] = useState('')
 
-  // Children are selectable too — Corrin can marry some of them, and children can marry each
-  // other (barring siblings) — canMarry below still gates it on real S-support data either way.
+  // The full route-compatible roster, including children — children are never a Primary option
+  // (see optionsForPrimary below) but remain valid Spouse picks, since Corrin can marry some of
+  // them and children can marry each other (barring siblings).
   const participants = useMemo(
     () => characters.filter((c) => isRouteCompatible(c.route, activeRoute)),
     [activeRoute],
@@ -42,27 +53,31 @@ export function MarriagePlanner() {
     return () => setUnitLabel('')
   }, [primary, spouse, setUnitLabel])
 
-  // Primary is the full roster of real "fixed parent" candidates — everyone minus two groups that
-  // only ever clutter this list instead of being a useful starting point:
-  //  - Children (Ophelia, Forrest, etc.): they only ever marry each other (which finds no child at
-  //    all — nobody's a fixed parent for a nonexistent third generation) or Corrin (which only ever
-  //    finds Kana, already reachable by picking Corrin as Primary instead). Always excluded.
-  //  - Adults whose only real marriage option is Corrin (Fuga, Anna, Gunter, ...) — picking one of
-  //    them first would only ever lead to pairing with Corrin anyway; picking Corrin as Primary
-  //    already surfaces them naturally in the Spouse list below.
-  // Corrin themselves are always kept regardless of their own match count. Spouse is entirely
-  // dependent on Primary: blank until Primary is picked, then narrowed to only who Primary can
-  // actually marry (excluding anyone the plan already reveals to be a parent/sibling of Primary).
-  const isCorrinId = (id: string) => id === 'corrin_m' || id === 'corrin_f'
-  const optionsForPrimary = participants.filter((c) => {
-    if (c.isChild) return false
-    if (isCorrinId(c.id)) return true
-    const marriageOptions = participants.filter((o) => o.id !== c.id && canMarry(supports, c, o, activeRoute))
-    return !(marriageOptions.length > 0 && marriageOptions.every((o) => isCorrinId(o.id)))
-  })
+  // A character already used in some other pairing is off the table entirely for a new one — real
+  // playthroughs are monogamous, so once Camilla's married off there's no legitimate second pairing
+  // to build for her. Hard-excluding her from both dropdowns (rather than allowing the pick and
+  // just warning about it) makes working through a full plan faster: nothing you select can turn
+  // out to be a dead end.
+  const assignedIds = useMemo(() => {
+    const ids = new Set<string>()
+    pairings.forEach((p) => {
+      ids.add(p.characterAId)
+      ids.add(p.characterBId)
+    })
+    return ids
+  }, [pairings])
+  // Primary is restricted to actual fixed parents (see fixedParentIds above) minus whoever's
+  // already assigned. Spouse is entirely dependent on Primary: blank until Primary is picked, then
+  // narrowed to only who Primary can actually marry (excluding anyone already assigned, or anyone
+  // the plan already reveals to be a parent/sibling of Primary).
+  const optionsForPrimary = participants.filter((c) => fixedParentIds.has(c.id) && !assignedIds.has(c.id))
   const optionsForSpouse = primary
     ? participants.filter(
-        (c) => c.id !== primary.id && canMarry(supports, primary, c, activeRoute) && !isFamilyBlocked(primary, c, pairings),
+        (c) =>
+          c.id !== primary.id &&
+          !assignedIds.has(c.id) &&
+          canMarry(supports, primary, c, activeRoute) &&
+          !isFamilyBlocked(primary, c, pairings),
       )
     : []
 
@@ -80,9 +95,6 @@ export function MarriagePlanner() {
 
   const roles = primary && spouse ? assignParentRoles(primary, spouse) : undefined
   const resultingChildren = roles ? findChildrenForPair(roles.father.id, roles.mother.id, childCandidates) : []
-
-  const alreadyAssignedPrimary = primaryId ? isCharacterAssigned(pairings, primaryId) : false
-  const alreadyAssignedSpouse = spouseId ? isCharacterAssigned(pairings, spouseId) : false
 
   function handleClear() {
     setPrimaryId('')
@@ -152,13 +164,6 @@ export function MarriagePlanner() {
                 {primary.name} and {spouse.name} can marry, but same-sex pairings produce no child.
               </p>
             )}
-            {(alreadyAssignedPrimary || alreadyAssignedSpouse) && (
-              <p className="text-sm text-amber-400">
-                {alreadyAssignedPrimary ? primary.name : spouse.name} is already assigned to another pairing in
-                this plan.
-              </p>
-            )}
-
             {eligible && canChild && roles && (
               <>
                 {resultingChildren.length === 0 && (
