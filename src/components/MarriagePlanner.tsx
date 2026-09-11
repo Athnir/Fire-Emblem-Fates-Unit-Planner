@@ -57,13 +57,18 @@ export function MarriagePlanner() {
   // playthroughs are monogamous, so once Camilla's married off there's no legitimate second pairing
   // to build for her. Hard-excluding her from both dropdowns (rather than allowing the pick and
   // just warning about it) makes working through a full plan faster: nothing you select can turn
-  // out to be a dead end.
+  // out to be a dead end. Corrin M and Corrin F are the same playthrough's one Corrin shown as two
+  // possible genders — once either one is used, both are blocked, not just the exact id picked.
   const assignedIds = useMemo(() => {
     const ids = new Set<string>()
     pairings.forEach((p) => {
       ids.add(p.characterAId)
       ids.add(p.characterBId)
     })
+    if (ids.has('corrin_m') || ids.has('corrin_f')) {
+      ids.add('corrin_m')
+      ids.add('corrin_f')
+    }
     return ids
   }, [pairings])
   // Primary is restricted to actual fixed parents (see fixedParentIds above) minus whoever's
