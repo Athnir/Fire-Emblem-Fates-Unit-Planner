@@ -85,6 +85,16 @@ export function promotedClassPool(sources: ClassSource[], route: Route): ClassOp
   return dedupedPool(sources, route, (line) => line.slice(1))
 }
 
+/** Full-line options (own tier plus every promotion) — for a character with no real base/promoted
+ * split at all (Songstress, DLC/Amiibo classes: is40LevelClass), whose entire multi-class segment
+ * range routes through the "promoted" editor alone (there's no separate pre-promotion phase to
+ * split off). promotedClassPool's normal `line.slice(1)` would drop each source's own base-tier
+ * entry — correct for a real promotion picker, but wrong here, since a source's own single tier
+ * (e.g. Azura's Songstress) IS the class itself, not something to exclude in favor of a promotion. */
+export function fullClassPool(sources: ClassSource[], route: Route): ClassOption[] {
+  return dedupedPool(sources, route, (line) => line)
+}
+
 export interface ClassSegment {
   id: string
   classId: string

@@ -12,6 +12,7 @@ import { classGrowthRate, classStatCap, classStatDelta, getStartingLevel, projec
 import {
   baseClassPool,
   friendshipClassSources,
+  fullClassPool,
   marriageClassSources,
   ownClassSetSources,
   promotedClassPool,
@@ -578,27 +579,39 @@ function MechanicsSection({
         </div>
       )}
       {partnerClass && (
-        <div className="space-y-1">
-          <p className="text-xs text-neutral-500">
-            {partner?.name} in {partnerClass.name} grants (class bonus, always applies): {(['str', 'mag', 'skl', 'spd', 'lck', 'def', 'res'] as const)
-              .filter((key) => partnerClass.pairUpBonus[key] !== 0)
-              .map((key) => `${STAT_LABELS[key]} +${partnerClass.pairUpBonus[key]}`)
-              .join(', ') || 'no stat bonus'}
-            {partnerClass.pairUpBonus.mov ? `, Mov +${partnerClass.pairUpBonus.mov}` : ''}
-          </p>
-          {receivedCharacterBonus === undefined ? (
-            <p className="text-xs text-amber-400">
-              Fill in everything needed to resolve {partner?.name}'s own rank bonus (variable parent,
-              Corrin's boon/bane if Corrin is a parent) to add their personal contribution on top.
+        <div>
+          {receivedCharacterBonus === undefined && (
+            <p className="mb-1.5 text-xs text-amber-400">
+              Fill in everything needed to resolve this bonus (variable parent, Corrin's boon/bane if
+              Corrin is a parent) to show the real numbers.
             </p>
-          ) : pairUpRank !== 'none' ? (
-            <p className="text-xs text-neutral-500">
-              {partner?.name}'s own {pairUpRank}-rank bonus: {(['str', 'mag', 'skl', 'spd', 'lck', 'def', 'res'] as const)
-                .filter((key) => (receivedCharacterBonus[key] ?? 0) !== 0)
-                .map((key) => `${STAT_LABELS[key]} +${receivedCharacterBonus[key]}`)
-                .join(', ') || 'no stat bonus'}
-            </p>
-          ) : null}
+          )}
+          <div className="grid max-w-sm grid-cols-4 gap-x-3 gap-y-1 text-sm">
+            {(['str', 'mag', 'skl', 'spd', 'lck', 'def', 'res'] as const).map((key) => {
+              const total =
+                receivedCharacterBonus === undefined
+                  ? undefined
+                  : partnerClass.pairUpBonus[key] + (receivedCharacterBonus[key] ?? 0)
+              return (
+                <div key={key} className="flex justify-between gap-2">
+                  <span className="text-neutral-500">{STAT_LABELS[key]}</span>
+                  <span className="font-mono text-neutral-100">
+                    {total === undefined ? '–' : total > 0 ? `+${total}` : total}
+                  </span>
+                </div>
+              )
+            })}
+            <div className="flex justify-between gap-2">
+              <span className="text-neutral-500">Mov</span>
+              <span className="font-mono text-neutral-100">
+                {receivedCharacterBonus === undefined
+                  ? '–'
+                  : partnerClass.pairUpBonus.mov > 0
+                    ? `+${partnerClass.pairUpBonus.mov}`
+                    : partnerClass.pairUpBonus.mov}
+              </span>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1079,7 +1092,14 @@ export function UnitDetail({
     ...friendshipSourcesForMultiClass,
   ]
   const preClassPool = baseClassPool(classSources, activeRoute)
-  const promotedClassPoolOptions = promotedClassPool(classSources, activeRoute)
+  // An is40Level character (Songstress, DLC/Amiibo classes) has no real base/promoted split — their
+  // entire segment range routes through this "promoted" pool alone (canMultiClassPromote is false
+  // for them, below), so it needs each source's OWN tier too, not just promotions past it — see
+  // fullClassPool's own comment for why promotedClassPool alone would silently drop it.
+  const promotedClassPoolOptions =
+    originalClass?.classSkills.length === 4
+      ? fullClassPool(classSources, activeRoute)
+      : promotedClassPool(classSources, activeRoute)
 
   const segmentIdRef = useRef(0)
   function addSegment(pool: ClassOption[], remaining: number, setSegments: (fn: (prev: ClassSegment[]) => ClassSegment[]) => void) {
