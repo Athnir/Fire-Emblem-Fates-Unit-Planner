@@ -1444,8 +1444,8 @@ export function UnitDetail({
   if (headless) {
     return (
       <MechanicsSection
-        classData={selectedClass}
-        statCaps={displayedStatCaps}
+        classData={statCapsDisplayClass}
+        statCaps={roughEstimateCaps}
         ownCharacter={character}
         getOwnVariableParentId={getOwnVariableParentId}
         activeRoute={activeRoute}
@@ -1895,8 +1895,8 @@ export function UnitDetail({
       )}
 
       <MechanicsSection
-        classData={selectedClass}
-        statCaps={displayedStatCaps}
+        classData={statCapsDisplayClass}
+        statCaps={roughEstimateCaps}
         ownCharacter={character}
         getOwnVariableParentId={getOwnVariableParentId}
         activeRoute={activeRoute}
