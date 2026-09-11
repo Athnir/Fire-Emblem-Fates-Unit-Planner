@@ -27,14 +27,17 @@ interface CandidateResult {
   maxStatMods: StatBlock
 }
 
+// Spacing comes from each cell's own trailing padding, not the grid's gap-x/gap-y — html2canvas
+// (used by "Save as image") doesn't reliably render CSS grid gap, which collapsed every label
+// straight into the next value with no space between them in exported screenshots.
 function DeltaGrid({ values }: { values: StatBlock }) {
   return (
-    <div className="grid grid-cols-4 gap-x-2 gap-y-0.5 whitespace-nowrap text-xs">
+    <div className="grid grid-cols-4 whitespace-nowrap text-xs">
       {STAT_KEYS.map((key) => {
         const value = values[key]
         const color = value > 0 ? 'text-sky-400' : value < 0 ? 'text-red-400' : 'text-neutral-400'
         return (
-          <span key={key}>
+          <span key={key} className="pr-2 pb-0.5">
             <span className="text-neutral-500">{STAT_LABELS[key]} </span>
             <span className={color}>{value > 0 ? `+${value}` : value}</span>
           </span>
@@ -46,9 +49,9 @@ function DeltaGrid({ values }: { values: StatBlock }) {
 
 function GrowthGrid({ values }: { values: StatBlock }) {
   return (
-    <div className="grid grid-cols-4 gap-x-2 gap-y-0.5 whitespace-nowrap text-xs">
+    <div className="grid grid-cols-4 whitespace-nowrap text-xs">
       {STAT_KEYS.map((key) => (
-        <span key={key}>
+        <span key={key} className="pr-2 pb-0.5">
           <span className="text-neutral-500">{STAT_LABELS[key]} </span>
           {values[key]}
         </span>

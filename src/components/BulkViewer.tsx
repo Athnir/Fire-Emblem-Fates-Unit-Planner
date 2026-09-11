@@ -36,16 +36,19 @@ function SkillTags({ skillIds }: { skillIds: string[] }) {
 }
 
 function StatGrid({ values, movement }: { values: StatBlock; movement?: number }) {
+  // Spacing comes from each cell's own trailing padding, not the grid's gap-x/gap-y — html2canvas
+  // (used by "Save as image") doesn't reliably render CSS grid gap, which collapsed every label
+  // straight into the next value with no space between them in exported screenshots.
   return (
-    <div className="grid grid-cols-4 gap-x-2 gap-y-0.5 whitespace-nowrap text-xs">
+    <div className="grid grid-cols-4 whitespace-nowrap text-xs">
       {STAT_KEYS.map((key) => (
-        <span key={key}>
+        <span key={key} className="pr-2 pb-0.5">
           <span className="text-neutral-500">{STAT_LABELS[key]} </span>
           {values[key]}
         </span>
       ))}
       {movement !== undefined && (
-        <span>
+        <span className="pr-2 pb-0.5">
           <span className="text-neutral-500">Mov </span>
           {movement}
         </span>
