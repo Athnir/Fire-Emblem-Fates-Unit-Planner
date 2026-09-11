@@ -370,7 +370,10 @@ function TeamViewerPanel() {
         {/* Table layout: comfortable at desktop/tablet widths, but 7 columns (two of them stat
             grids) don't fit a phone screen without constant horizontal scrolling — see the
             stacked-card layout below, shown instead under the sm breakpoint. */}
-        <div className="hidden overflow-x-auto rounded-lg border border-neutral-800 bg-neutral-900 sm:block">
+        <div
+          data-export-table
+          className="hidden overflow-x-auto rounded-lg border border-neutral-800 bg-neutral-900 sm:block"
+        >
           <table className="w-full min-w-[1000px] border-collapse text-sm">
             <thead>
               <tr className="border-b border-neutral-800 text-left text-xs uppercase tracking-wide text-neutral-500">
@@ -386,7 +389,7 @@ function TeamViewerPanel() {
             <tbody>{ids.map((id) => renderRow(id))}</tbody>
           </table>
         </div>
-        <div className="space-y-3 sm:hidden">{ids.map((id) => renderMainCard(id))}</div>
+        <div data-export-cards className="space-y-3 sm:hidden">{ids.map((id) => renderMainCard(id))}</div>
       </div>
     )
   }
@@ -470,7 +473,10 @@ function TeamViewerPanel() {
     return (
       <div className="space-y-2">
         <h4 className="text-sm font-semibold text-neutral-300">Backpack Only</h4>
-        <div className="hidden overflow-x-auto rounded-lg border border-neutral-800 bg-neutral-900 sm:block">
+        <div
+          data-export-table
+          className="hidden overflow-x-auto rounded-lg border border-neutral-800 bg-neutral-900 sm:block"
+        >
           <table className="w-full min-w-[550px] border-collapse text-sm">
             <thead>
               <tr className="border-b border-neutral-800 text-left text-xs uppercase tracking-wide text-neutral-500">
@@ -483,7 +489,7 @@ function TeamViewerPanel() {
             <tbody>{ids.map((id) => renderBackpackRow(id))}</tbody>
           </table>
         </div>
-        <div className="space-y-3 sm:hidden">{ids.map((id) => renderBackpackCard(id))}</div>
+        <div data-export-cards className="space-y-3 sm:hidden">{ids.map((id) => renderBackpackCard(id))}</div>
       </div>
     )
   }

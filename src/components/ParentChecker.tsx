@@ -257,7 +257,10 @@ export function ParentChecker() {
           {/* Table layout: comfortable at desktop/tablet widths, but a 3-column table with two
               stat grids packed in doesn't fit a phone screen without constant horizontal scrolling —
               see the stacked-card layout below, shown instead under the sm breakpoint. */}
-          <div className="hidden overflow-x-auto rounded-lg border border-neutral-800 bg-neutral-900 sm:block">
+          <div
+            data-export-table
+            className="hidden overflow-x-auto rounded-lg border border-neutral-800 bg-neutral-900 sm:block"
+          >
             <table className="w-full min-w-[550px] border-collapse text-sm">
               <thead>
                 <tr className="border-b border-neutral-800 text-left text-xs uppercase tracking-wide text-neutral-500">
@@ -295,7 +298,7 @@ export function ParentChecker() {
             </table>
           </div>
 
-          <div className="space-y-3 sm:hidden">
+          <div data-export-cards className="space-y-3 sm:hidden">
             {candidateIds.map((id) => {
               const candidate = charactersById[id]
               const result = computeForCandidate(id)
