@@ -4,7 +4,7 @@ import { earliestChapterFor, earliestChildLevel, FINAL_CHAPTER, levelForChapter 
 import { classes as allClasses, classesById, classesByName } from '../data/classes'
 import { STAT_KEYS, type Character, type ClassData, type PairUpBonus, type Route, type StatBlock, type WeaponRank } from '../data/types'
 import { childAvailableClasses, computeChild, fixedParentContribution, resolveSecondGenParent } from '../logic/childCalculator'
-import { getFixedParent, isFamilyBlocked } from '../logic/childLookup'
+import { getFixedParent, isFamilyBlocked, resolveChildActualParents } from '../logic/childLookup'
 import { getClassLine, getOwnClassTree, isCorrinWithoutTalent, weaponRankBonus } from '../logic/classResolution'
 import { applyCorrinBuild, withCorrinBuild } from '../logic/corrinBuild'
 import { canFriendshipSeal, canMarry, canProduceChild, canSupport, isRouteCompatible } from '../logic/eligibility'
@@ -44,6 +44,14 @@ const ITEM_CLASSES = allClasses.filter((c) => c.isDlcClass || c.isAmiibo)
 export interface UnitPlanComputedSummary {
   characterId: string
   className: string | undefined
+  /** The final class's own id — same class `className` names, just keyed for lookup (e.g. picking a
+   * sensible starting value for the Bulk Viewer's own backpack-class picker, below). */
+  classId: string | undefined
+  /** This unit's FULL unlocked class pool (their own Class Set plus whatever their saved
+   * spouse/friend picks unlock) — same list the plain class picker above draws from, reported so a
+   * backpack-only unit (no real deployment, never levels as a front-line unit) can still get a real
+   * class picker fed by their actual multi-classing setup instead of a guessed default. */
+  availableClasses: { id: string; name: string }[]
   weaponRanks: WeaponRank[] | undefined
   /** This unit's own stat CAP in their final class (not a leveled estimate) — level-independent, so
    * it doesn't depend on where the story chapter/target-level pickers happen to be set. */
@@ -119,6 +127,49 @@ function ClassModifierDiff({ title, from, to }: { title: string; from: StatBlock
 }
 
 /**
+ * A plain controlled `<input type="number" value={seg.levels}>` snaps back to a clamped digit the
+ * instant the field goes empty (Number('') === 0, clamped up to the min) — so deleting the "1" to
+ * type "4" never actually produces an empty field to type into; it re-fills with "1" first and any
+ * further digit just appends onto it ("14"/"41"). Buffering the raw typed text in local state (only
+ * clamping/committing once it parses to a number, and only snapping back to the last committed value
+ * on blur if left empty) lets the field go blank mid-edit like any normal number input.
+ */
+function LevelsInput({
+  value,
+  min,
+  max,
+  onCommit,
+}: {
+  value: number
+  min: number
+  max: number
+  onCommit: (value: number) => void
+}) {
+  const [text, setText] = useState(String(value))
+  useEffect(() => setText(String(value)), [value])
+
+  return (
+    <input
+      type="number"
+      min={min}
+      max={max}
+      value={text}
+      onChange={(e) => {
+        const next = e.target.value
+        setText(next)
+        if (next === '') return
+        const parsed = Math.round(Number(next))
+        if (!Number.isNaN(parsed)) onCommit(Math.min(Math.max(min, parsed), max))
+      }}
+      onBlur={() => {
+        if (text === '' || Number.isNaN(Number(text))) setText(String(value))
+      }}
+      className="w-14 rounded-md border border-neutral-700 bg-neutral-800 px-1.5 py-1 text-xs text-neutral-200"
+    />
+  )
+}
+
+/**
  * One row per class segment: pick which of the pooled classes this stretch of levels was spent in,
  * and how many levels. `remaining` is how many more levels are available across the WHOLE list (not
  * just this row) — used both to cap the per-row input and to disable "Add" once exhausted.
@@ -165,16 +216,11 @@ function SegmentEditor({
               </select>
               <label className="flex items-center gap-1 text-xs text-neutral-400">
                 Levels
-                <input
-                  type="number"
+                <LevelsInput
+                  value={seg.levels}
                   min={1}
                   max={rowMax}
-                  value={seg.levels}
-                  onChange={(e) => {
-                    const raw = Math.round(Number(e.target.value)) || 1
-                    onUpdate(seg.id, { levels: Math.min(Math.max(1, raw), rowMax) })
-                  }}
-                  className="w-14 rounded-md border border-neutral-700 bg-neutral-800 px-1.5 py-1 text-xs text-neutral-200"
+                  onCommit={(levels) => onUpdate(seg.id, { levels })}
                 />
               </label>
               {!option && <span className="text-xs text-amber-400">no longer available</span>}
@@ -330,6 +376,17 @@ function MechanicsSection({
   const partnerVariableChar = partnerVariableParentId
     ? withCorrinBuild(charactersById[partnerVariableParentId], corrinBuild)
     : undefined
+  // The received bonus has the same two layers as the given one above (class-based + this partner's
+  // own personal support-rank table) — cumulativePairUpBonus already returns {} (not undefined) at
+  // rank "none" regardless of whether the chain resolves, so no-rank pair-ups never show the warning.
+  function getPartnerVariableParentId(childId: string): string | undefined {
+    if (partner && childId === partner.id) return partnerVariableParentId || undefined
+    return undefined
+  }
+  const partnerEntry = partner
+    ? resolveGivenEntry(partner, corrinBuild.boon, corrinBuild.bane, getPartnerVariableParentId)
+    : undefined
+  const receivedCharacterBonus = cumulativePairUpBonus(partnerEntry, pairUpRank)
 
   const partnerDefaultClass = partner ? classesByName[partner.joinClass ?? partner.startingClass] : undefined
   const partnerAvailableClasses = useMemo(() => {
@@ -521,13 +578,28 @@ function MechanicsSection({
         </div>
       )}
       {partnerClass && (
-        <p className="text-xs text-neutral-500">
-          {partner?.name} in {partnerClass.name} grants: {(['str', 'mag', 'skl', 'spd', 'lck', 'def', 'res'] as const)
-            .filter((key) => partnerClass.pairUpBonus[key] !== 0)
-            .map((key) => `${STAT_LABELS[key]} +${partnerClass.pairUpBonus[key]}`)
-            .join(', ') || 'no stat bonus'}
-          {partnerClass.pairUpBonus.mov ? `, Mov +${partnerClass.pairUpBonus.mov}` : ''}
-        </p>
+        <div className="space-y-1">
+          <p className="text-xs text-neutral-500">
+            {partner?.name} in {partnerClass.name} grants (class bonus, always applies): {(['str', 'mag', 'skl', 'spd', 'lck', 'def', 'res'] as const)
+              .filter((key) => partnerClass.pairUpBonus[key] !== 0)
+              .map((key) => `${STAT_LABELS[key]} +${partnerClass.pairUpBonus[key]}`)
+              .join(', ') || 'no stat bonus'}
+            {partnerClass.pairUpBonus.mov ? `, Mov +${partnerClass.pairUpBonus.mov}` : ''}
+          </p>
+          {receivedCharacterBonus === undefined ? (
+            <p className="text-xs text-amber-400">
+              Fill in everything needed to resolve {partner?.name}'s own rank bonus (variable parent,
+              Corrin's boon/bane if Corrin is a parent) to add their personal contribution on top.
+            </p>
+          ) : pairUpRank !== 'none' ? (
+            <p className="text-xs text-neutral-500">
+              {partner?.name}'s own {pairUpRank}-rank bonus: {(['str', 'mag', 'skl', 'spd', 'lck', 'def', 'res'] as const)
+                .filter((key) => (receivedCharacterBonus[key] ?? 0) !== 0)
+                .map((key) => `${STAT_LABELS[key]} +${receivedCharacterBonus[key]}`)
+                .join(', ') || 'no stat bonus'}
+            </p>
+          ) : null}
+        </div>
       )}
 
       {statCaps && partnerClass && (
@@ -537,17 +609,25 @@ function MechanicsSection({
           </h4>
           <div className="grid max-w-sm grid-cols-4 gap-x-3 gap-y-1 text-sm">
             {STAT_KEYS.map((key) => {
-              const bonus = key === 'hp' ? 0 : partnerClass.pairUpBonus[key]
+              // HP never gets a pair-up bonus at all (class or personal) — always just the plain cap.
+              const total =
+                key === 'hp'
+                  ? Math.round(statCaps[key])
+                  : receivedCharacterBonus === undefined
+                    ? undefined
+                    : Math.round(statCaps[key]) + partnerClass.pairUpBonus[key] + (receivedCharacterBonus[key] ?? 0)
               return (
                 <div key={key} className="flex justify-between gap-2">
                   <span className="text-neutral-500">{STAT_LABELS[key]}</span>
-                  <span className="font-mono text-neutral-100">{Math.round(statCaps[key]) + bonus}</span>
+                  <span className="font-mono text-neutral-100">{total === undefined ? '–' : total}</span>
                 </div>
               )
             })}
             <div className="flex justify-between gap-2">
               <span className="text-neutral-500">Mov</span>
-              <span className="font-mono text-neutral-100">{finalMov + partnerClass.pairUpBonus.mov}</span>
+              <span className="font-mono text-neutral-100">
+                {receivedCharacterBonus === undefined ? '–' : finalMov + partnerClass.pairUpBonus.mov}
+              </span>
             </div>
           </div>
         </div>
@@ -686,9 +766,33 @@ export function UnitDetail({
   // Corrin, who CAN normally marry a non-Kana child) and added to A-rank in the Pair Up section
   // below even with no data at all (representing the parent/child bond itself, not just the
   // sibling relationship it reveals).
-  const familyOverrideIds = [variableChar?.id, variableParentOtherChild?.id].filter(
-    (id): id is string => Boolean(id),
-  )
+  //
+  // Two symmetric cases, since either side of a parent/child pair can be the one currently being
+  // planned: (1) `character` IS the child — their FIXED parent (e.g. Azura for Shigure) is always a
+  // real bond by identity alone, no plan needed, and was previously missing here entirely (only the
+  // Variable side above was ever added); (2) `character` IS an adult — anyone whose fixed parent
+  // resolves to them is always their child (identity alone again), and anyone whose ACTUAL parents
+  // per the saved Marriage Plan resolve to them too (covers being the Variable side, which fixed
+  // identity alone can't reveal on its own).
+  const familyOverrideIds = useMemo(() => {
+    const ids = new Set<string>()
+    if (character.isChild) {
+      if (fixedChar) ids.add(fixedChar.id)
+      if (variableChar) ids.add(variableChar.id)
+      if (variableParentOtherChild) ids.add(variableParentOtherChild.id)
+    } else {
+      for (const child of characters) {
+        if (!child.isChild) continue
+        if (getFixedParent(child)?.id === character.id) {
+          ids.add(child.id)
+          continue
+        }
+        const actual = resolveChildActualParents(child, pairings)
+        if (actual && (actual.fatherId === character.id || actual.motherId === character.id)) ids.add(child.id)
+      }
+    }
+    return Array.from(ids)
+  }, [character, fixedChar, variableChar, variableParentOtherChild, pairings])
 
   // Children auto-level with story progress rather than joining at one fixed level — the earliest
   // selectable chapter is their own real unlock requirement (never before Ch8, the earliest any
@@ -910,6 +1014,11 @@ export function UnitDetail({
   const displayedGrowthRates = aptitudeOn
     ? STAT_KEYS.reduce((acc, key) => ({ ...acc, [key]: selectedGrowthRates[key] + 10 }), {} as StatBlock)
     : selectedGrowthRates
+  // Same Aptitude bump applied to both sides of the Growth % comparison below — otherwise the diff
+  // would show an extra +10 that's just from Aptitude being on, not from the class change itself.
+  const displayedOriginalGrowthRates = aptitudeOn
+    ? STAT_KEYS.reduce((acc, key) => ({ ...acc, [key]: originalGrowthRates[key] + 10 }), {} as StatBlock)
+    : originalGrowthRates
   const minPromoLevel = Math.max(10, startLevel)
   const [earlyPromote, setEarlyPromote] = useState(false)
   const [promotionLevel, setPromotionLevel] = useState(minPromoLevel)
@@ -1209,6 +1318,8 @@ export function UnitDetail({
     onComputedSummary({
       characterId: character.id,
       className: finalClass?.name,
+      classId: finalClass?.id,
+      availableClasses: availableClasses.map((c) => ({ id: c.id, name: c.name })),
       weaponRanks: finalClass?.weaponRanks,
       maxStats: roughEstimateCaps,
       movement: finalClass?.movement,
@@ -1218,7 +1329,7 @@ export function UnitDetail({
       pairUpBonus: pairUpSummary.pairUpBonus,
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [character.id, finalMultiClassClass, selectedClass, roughEstimateCaps, effectiveGrowthRates, pairUpSummary])
+  }, [character.id, finalMultiClassClass, selectedClass, availableClasses, roughEstimateCaps, effectiveGrowthRates, pairUpSummary])
 
   // MechanicsSection still needs to actually mount even in headless mode — it's the one that
   // resolves the backpack's class and reports the pair-up bonus via its own onComputedSummary,
@@ -1503,11 +1614,18 @@ export function UnitDetail({
       )}
 
       {selectedClass && originalClass && selectedClass.name !== originalClass.name && (
-        <ClassModifierDiff
-          title={`${originalClass.name} → ${selectedClass.name} Class Modifiers`}
-          from={originalClass.statModifiers}
-          to={selectedClass.statModifiers}
-        />
+        <div className="space-y-3 border-t border-neutral-800 pt-3">
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
+            {originalClass.name} → {selectedClass.name}
+          </h4>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <ClassModifierDiff title="Class Modifiers" from={originalClass.statModifiers} to={selectedClass.statModifiers} />
+            <ClassModifierDiff title="Growth %" from={displayedOriginalGrowthRates} to={displayedGrowthRates} />
+            {originalCaps && selectedCaps && (
+              <ClassModifierDiff title="Max Stats" from={originalCaps} to={selectedCaps} />
+            )}
+          </div>
+        </div>
       )}
 
       {projected && (

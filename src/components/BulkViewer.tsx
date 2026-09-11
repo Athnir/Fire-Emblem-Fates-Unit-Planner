@@ -3,6 +3,7 @@ import { characters, charactersById } from '../data/characters'
 import { classesById } from '../data/classes'
 import { skillsById } from '../data/skills'
 import { STAT_KEYS, type PairUpBonus, type StatBlock } from '../data/types'
+import { isRouteCompatible } from '../logic/eligibility'
 import { classStatCap } from '../logic/levelProjection'
 import { useCorrinBuildStore } from '../state/corrinBuildStore'
 import { useSavedBuildsStore } from '../state/savedBuildsStore'
@@ -13,6 +14,44 @@ import { UnitDetail, type UnitPlanComputedSummary } from './UnitPlanner'
 
 const STAT_LABELS: Record<string, string> = {
   hp: 'HP', str: 'Str', mag: 'Mag', skl: 'Skl', spd: 'Spd', lck: 'Lck', def: 'Def', res: 'Res',
+}
+
+/** Shared between the table (desktop/tablet) and stacked-card (phone) layouts below, so the two
+ * never drift out of sync with each other. */
+function SkillTags({ skillIds }: { skillIds: string[] }) {
+  if (skillIds.length === 0) return <span className="text-neutral-600">—</span>
+  return (
+    <div className="flex max-w-[8rem] flex-wrap gap-1">
+      {skillIds.map((skillId) => (
+        <span
+          key={skillId}
+          className="flex items-center gap-1 rounded-md border border-neutral-700 bg-neutral-800 px-1 py-0.5 text-[11px] text-neutral-300"
+        >
+          <AssetIcon type="skill" iconId={skillId} label={skillsById[skillId]?.name ?? skillId} size={12} />
+          {skillsById[skillId]?.name ?? skillId}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function StatGrid({ values, movement }: { values: StatBlock; movement?: number }) {
+  return (
+    <div className="grid grid-cols-4 gap-x-2 gap-y-0.5 whitespace-nowrap text-xs">
+      {STAT_KEYS.map((key) => (
+        <span key={key}>
+          <span className="text-neutral-500">{STAT_LABELS[key]} </span>
+          {values[key]}
+        </span>
+      ))}
+      {movement !== undefined && (
+        <span>
+          <span className="text-neutral-500">Mov </span>
+          {movement}
+        </span>
+      )}
+    </div>
+  )
 }
 
 /**
@@ -77,10 +116,22 @@ function TeamViewerPanel() {
     return typeof raw === 'string' && raw ? raw : undefined
   }
 
+  // Replicate ("Creates a replica of the user once per map") is the ONLY thing that legally doubles
+  // a unit's slot cap — "Backpack unit" (isBackpackUnit) is a completely separate, deployment-status
+  // flag (this unit is never deployed as a front unit at all, e.g. no room for them in the roster
+  // this run) and says nothing about whether a second copy of them actually exists. A backpack-only
+  // unit WITHOUT Replicate is still just one real copy — usable as exactly one front unit's backpack,
+  // same cap of 1 as anyone else, not 2 — while a normal front-deployed unit like Corrin F, once she
+  // actually has Replicate equipped, can legally ALSO back someone else without needing the flag.
+  const hasReplicate = (characterId: string): boolean => {
+    const loadout = skillSet?.entries.find((e) => e.characterId === characterId)?.data.loadout
+    return Array.isArray(loadout) && loadout.includes('replicate')
+  }
+
   // How many "slots" (own front row, if it counts + times named as someone else's backpack) each
   // roster member fills — normally capped at 1 (a unit is either deployed as themselves or riding as
-  // a backpack, never both), raised to 2 for a unit marked as a backpack unit (a real clone, so both
-  // at once is legal). Purely informational: nothing here is blocked, just flagged.
+  // a backpack, never both), raised to 2 only for a unit actually carrying Replicate (a real clone
+  // exists, so both at once is legal). Purely informational: nothing here is blocked, just flagged.
   const backpackCounts = useMemo(() => {
     const counts = new Map<string, number>()
     for (const id of rosterIds) {
@@ -90,7 +141,7 @@ function TeamViewerPanel() {
     return counts
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rosterIds, summaries, unitSet])
-  const slotCap = (id: string) => (isBackpackUnit(id) ? 2 : 1)
+  const slotCap = (id: string) => (hasReplicate(id) ? 2 : 1)
   const totalSlots = (id: string) => (hasFrontSlot(id) ? 1 : 0) + (backpackCounts.get(id) ?? 0)
   const isOverCap = (id: string) => totalSlots(id) > slotCap(id)
 
@@ -103,25 +154,37 @@ function TeamViewerPanel() {
     const backpackId = getBackpackId(leadId)
     if (!backpackId) return undefined
     if (isBackpackUnit(backpackId)) {
-      const classId = getBackpackClassId(backpackId)
+      const classId = getBackpackClassId(backpackId) ?? summaries[backpackId]?.classId
       return classId ? classesById[classId]?.pairUpBonus : undefined
     }
     return summaries[leadId]?.pairUpBonus
   }
 
-  // A row's own stats+movement: normally Unit Planner's own headless computation (summary), but a
-  // backpack unit with no real Unit Set entry has none of that — fall back to a static class-cap
-  // computed directly from whichever class was picked for them in Skill Planner.
+  function handleBackpackClassChange(characterId: string, classId: string) {
+    // backpackClassId is a Skill-Planner-owned field (see isBackpackUnit/getBackpackClassId above) —
+    // patching the Unit Set here would silently do nothing, since nothing ever reads it back from there.
+    if (!skillSet) return
+    patchBuildSetEntryData(skillSet.id, characterId, charactersById[characterId]?.name ?? characterId, {
+      backpackClassId: classId,
+    })
+  }
+
+  // A backpack-only unit never levels as a front-line unit, so their OWN stat progression is beside
+  // the point — what matters for whoever they're backing is just which class they're set to
+  // contribute as (backpackClassId, picked from their real unlocked pool below — falls back to
+  // their headless-resolved default class if nothing's been explicitly picked yet). A normal
+  // (non-backpack) unit's stats still come from Unit Planner's own headless computation as before.
   const getOwnStats = (id: string): { stats: StatBlock; movement: number } | undefined => {
-    const summary = summaries[id]
-    if (summary?.maxStats && summary.movement !== undefined) {
-      return { stats: summary.maxStats, movement: summary.movement }
-    }
     if (isBackpackUnit(id)) {
-      const classId = getBackpackClassId(id)
+      const classId = getBackpackClassId(id) ?? summaries[id]?.classId
       const character = charactersById[id]
       const cls = classId ? classesById[classId] : undefined
       if (character && cls) return { stats: classStatCap(cls, character.maxStatModifiers), movement: cls.movement }
+      return undefined
+    }
+    const summary = summaries[id]
+    if (summary?.maxStats && summary.movement !== undefined) {
+      return { stats: summary.maxStats, movement: summary.movement }
     }
     return undefined
   }
@@ -153,7 +216,8 @@ function TeamViewerPanel() {
   const mainIds = rosterIds.filter((id) => !isBackpackUnit(id))
   const backpackOnlyIds = rosterIds.filter((id) => isBackpackUnit(id))
 
-  function renderRow(id: string) {
+  /** Every field a main-table row/card needs, computed once and shared between both layouts below. */
+  function getMainRowData(id: string) {
     const character = charactersById[id]
     const summary = summaries[id]
     const loadout = skillSet?.entries.find((e) => e.characterId === id)?.data.loadout
@@ -162,91 +226,93 @@ function TeamViewerPanel() {
     const growthRates = summary?.growthRates ?? character?.growthRates
     const overCap = isOverCap(id)
     const backpackId = getBackpackId(id) ?? ''
+    return { character, summary, skillIds, adjusted, growthRates, overCap, backpackId }
+  }
+
+  function BackpackPicker({ id, backpackId, overCap }: { id: string; backpackId: string; overCap: boolean }) {
+    if (!unitSet) return <span className="text-neutral-600">—</span>
+    return (
+      <>
+        <select
+          value={backpackId}
+          onChange={(e) => handleReassignBackpack(id, e.target.value)}
+          className={`w-full max-w-[10rem] rounded-md border bg-neutral-800 px-2 py-1 text-xs text-neutral-200 ${
+            overCap ? 'border-red-500' : 'border-neutral-700'
+          }`}
+        >
+          <option value="">(none)</option>
+          {characters
+            .filter((c) => isRouteCompatible(c.route, unitSet.route))
+            .map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+        </select>
+        {overCap && <p className="mt-1 text-xs text-amber-400">Too many {charactersById[id]?.name ?? id}.</p>}
+      </>
+    )
+  }
+
+  function renderRow(id: string) {
+    const { character, summary, skillIds, adjusted, growthRates, overCap, backpackId } = getMainRowData(id)
     return (
       <tr key={id} className="border-b border-neutral-800/60 align-top last:border-0">
         <td className="px-3 py-2 font-medium text-neutral-200">{character?.name ?? id}</td>
         <td className="px-3 py-2">
-          {unitSet ? (
-            <select
-              value={backpackId}
-              onChange={(e) => handleReassignBackpack(id, e.target.value)}
-              className={`w-full max-w-[10rem] rounded-md border bg-neutral-800 px-2 py-1 text-xs text-neutral-200 ${
-                overCap ? 'border-red-500' : 'border-neutral-700'
-              }`}
-            >
-              <option value="">(none)</option>
-              {characters.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
-          ) : (
-            <span className="text-neutral-600">—</span>
-          )}
-          {overCap && <p className="mt-1 text-xs text-amber-400">Too many {character?.name ?? id}.</p>}
+          <BackpackPicker id={id} backpackId={backpackId} overCap={overCap} />
         </td>
         <td className="px-3 py-2 text-neutral-300">{summary?.className ?? '—'}</td>
         <td className="px-3 py-2 text-neutral-300">
           {summary?.weaponRanks?.length ? summary.weaponRanks.map((w) => `${w.type} ${w.rank}`).join(', ') : '—'}
         </td>
-        <td className="px-3 py-2">
-          {skillIds.length > 0 ? (
-            <div className="flex max-w-[8rem] flex-wrap gap-1">
-              {skillIds.map((skillId) => (
-                <span
-                  key={skillId}
-                  className="flex items-center gap-1 rounded-md border border-neutral-700 bg-neutral-800 px-1 py-0.5 text-[11px] text-neutral-300"
-                >
-                  <AssetIcon type="skill" iconId={skillId} label={skillsById[skillId]?.name ?? skillId} size={12} />
-                  {skillsById[skillId]?.name ?? skillId}
-                </span>
-              ))}
-            </div>
-          ) : (
-            <span className="text-neutral-600">—</span>
-          )}
-        </td>
+        <td className="px-3 py-2"><SkillTags skillIds={skillIds} /></td>
+        <td className="px-3 py-2 text-neutral-300">{growthRates ? <StatGrid values={growthRates} /> : '—'}</td>
         <td className="px-3 py-2 text-neutral-300">
-          {growthRates ? (
-            <div className="grid grid-cols-4 gap-x-2 gap-y-0.5 whitespace-nowrap text-xs">
-              {STAT_KEYS.map((key) => (
-                <span key={key}>
-                  <span className="text-neutral-500">{STAT_LABELS[key]} </span>
-                  {growthRates[key]}
-                </span>
-              ))}
-            </div>
-          ) : (
-            '—'
-          )}
-        </td>
-        <td className="px-3 py-2 text-neutral-300">
-          {adjusted ? (
-            <div className="grid grid-cols-4 gap-x-2 gap-y-0.5 whitespace-nowrap text-xs">
-              {STAT_KEYS.map((key) => (
-                <span key={key}>
-                  <span className="text-neutral-500">{STAT_LABELS[key]} </span>
-                  {adjusted.stats[key]}
-                </span>
-              ))}
-              <span>
-                <span className="text-neutral-500">Mov </span>
-                {adjusted.movement}
-              </span>
-            </div>
-          ) : (
-            '—'
-          )}
+          {adjusted ? <StatGrid values={adjusted.stats} movement={adjusted.movement} /> : '—'}
         </td>
       </tr>
     )
   }
 
-  function renderTable(ids: string[], title?: string) {
+  function renderMainCard(id: string) {
+    const { character, summary, skillIds, adjusted, growthRates, overCap, backpackId } = getMainRowData(id)
+    return (
+      <div key={id} className="space-y-2 rounded-lg border border-neutral-800 bg-neutral-900 p-3">
+        <div className="font-medium text-neutral-200">{character?.name ?? id}</div>
+        <div>
+          <div className="mb-1 text-xs uppercase tracking-wide text-neutral-500">Backpack</div>
+          <BackpackPicker id={id} backpackId={backpackId} overCap={overCap} />
+        </div>
+        <div className="text-sm text-neutral-300">
+          <span className="text-neutral-500">Class: </span>{summary?.className ?? '—'}
+        </div>
+        <div className="text-sm text-neutral-300">
+          <span className="text-neutral-500">Weapons: </span>
+          {summary?.weaponRanks?.length ? summary.weaponRanks.map((w) => `${w.type} ${w.rank}`).join(', ') : '—'}
+        </div>
+        <div>
+          <div className="mb-1 text-xs uppercase tracking-wide text-neutral-500">Skills</div>
+          <SkillTags skillIds={skillIds} />
+        </div>
+        <div>
+          <div className="mb-1 text-xs uppercase tracking-wide text-neutral-500">Growth %</div>
+          {growthRates ? <StatGrid values={growthRates} /> : '—'}
+        </div>
+        <div>
+          <div className="mb-1 text-xs uppercase tracking-wide text-neutral-500">Max Stats</div>
+          {adjusted ? <StatGrid values={adjusted.stats} movement={adjusted.movement} /> : '—'}
+        </div>
+      </div>
+    )
+  }
+
+  function renderTable(ids: string[]) {
     if (ids.length === 0) return null
     return (
       <div className="space-y-2">
-        {title && <h4 className="text-sm font-semibold text-neutral-300">{title}</h4>}
-        <div className="overflow-x-auto rounded-lg border border-neutral-800 bg-neutral-900">
+        {/* Table layout: comfortable at desktop/tablet widths, but 7 columns (two of them stat
+            grids) don't fit a phone screen without constant horizontal scrolling — see the
+            stacked-card layout below, shown instead under the sm breakpoint. */}
+        <div className="hidden overflow-x-auto rounded-lg border border-neutral-800 bg-neutral-900 sm:block">
           <table className="w-full min-w-[1000px] border-collapse text-sm">
             <thead>
               <tr className="border-b border-neutral-800 text-left text-xs uppercase tracking-wide text-neutral-500">
@@ -262,6 +328,114 @@ function TeamViewerPanel() {
             <tbody>{ids.map((id) => renderRow(id))}</tbody>
           </table>
         </div>
+        <div className="space-y-3 sm:hidden">{ids.map((id) => renderMainCard(id))}</div>
+      </div>
+    )
+  }
+
+  /**
+   * A backpack-only unit is never actually deployed as a front-line unit — they have no stat
+   * progression worth showing (Growth %/Max Stats), and asking "who is THEIR backpack" makes no
+   * sense (only front units carry a backpack). What DOES matter is which class they're contributing
+   * as, since that's what determines the flat class-based Pair-Up bonus they hand off — the picker
+   * below is fed by their real unlocked pool (Class Set + whatever spouse/friend was set for them in
+   * Unit Planner, reported via availableClasses), not a hardcoded guess, so e.g. Laslow's Xander
+   * friendship correctly offers his Cavalier-line reclass options here too.
+   */
+  function getBackpackRowData(id: string) {
+    const character = charactersById[id]
+    const summary = summaries[id]
+    const loadout = skillSet?.entries.find((e) => e.characterId === id)?.data.loadout
+    const skillIds = Array.isArray(loadout) ? loadout : []
+    const options = summary?.availableClasses ?? []
+    const pickedClassId = getBackpackClassId(id) || summary?.classId || ''
+    const pickedClass = pickedClassId ? classesById[pickedClassId] : undefined
+    const overCap = isOverCap(id)
+    return { character, skillIds, options, pickedClassId, pickedClass, overCap }
+  }
+
+  function BackpackClassPicker({ id, options, pickedClassId }: {
+    id: string
+    options: { id: string; name: string }[]
+    pickedClassId: string
+  }) {
+    if (options.length === 0) return <span className="text-neutral-600">—</span>
+    return (
+      <select
+        value={pickedClassId}
+        onChange={(e) => handleBackpackClassChange(id, e.target.value)}
+        className="w-full max-w-[10rem] rounded-md border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs text-neutral-200"
+      >
+        <option value="">(pick a class)</option>
+        {options.map((c) => (
+          <option key={c.id} value={c.id}>{c.name}</option>
+        ))}
+      </select>
+    )
+  }
+
+  function renderBackpackRow(id: string) {
+    const { character, skillIds, options, pickedClassId, pickedClass, overCap } = getBackpackRowData(id)
+    return (
+      <tr key={id} className="border-b border-neutral-800/60 align-top last:border-0">
+        <td className="px-3 py-2 font-medium text-neutral-200">
+          {character?.name ?? id}
+          {overCap && <p className="mt-1 text-xs text-amber-400">Used as backpack too many times.</p>}
+        </td>
+        <td className="px-3 py-2">
+          <BackpackClassPicker id={id} options={options} pickedClassId={pickedClassId} />
+        </td>
+        <td className="px-3 py-2 text-neutral-300">
+          {pickedClass?.weaponRanks?.length ? pickedClass.weaponRanks.map((w) => `${w.type} ${w.rank}`).join(', ') : '—'}
+        </td>
+        <td className="px-3 py-2"><SkillTags skillIds={skillIds} /></td>
+      </tr>
+    )
+  }
+
+  function renderBackpackCard(id: string) {
+    const { character, skillIds, options, pickedClassId, pickedClass, overCap } = getBackpackRowData(id)
+    return (
+      <div key={id} className="space-y-2 rounded-lg border border-neutral-800 bg-neutral-900 p-3">
+        <div className="font-medium text-neutral-200">
+          {character?.name ?? id}
+          {overCap && <p className="mt-1 text-xs text-amber-400">Used as backpack too many times.</p>}
+        </div>
+        <div>
+          <div className="mb-1 text-xs uppercase tracking-wide text-neutral-500">Class</div>
+          <BackpackClassPicker id={id} options={options} pickedClassId={pickedClassId} />
+        </div>
+        <div className="text-sm text-neutral-300">
+          <span className="text-neutral-500">Weapons: </span>
+          {pickedClass?.weaponRanks?.length ? pickedClass.weaponRanks.map((w) => `${w.type} ${w.rank}`).join(', ') : '—'}
+        </div>
+        <div>
+          <div className="mb-1 text-xs uppercase tracking-wide text-neutral-500">Skills</div>
+          <SkillTags skillIds={skillIds} />
+        </div>
+      </div>
+    )
+  }
+
+  function renderBackpackTable(ids: string[]) {
+    if (ids.length === 0) return null
+    return (
+      <div className="space-y-2">
+        <h4 className="text-sm font-semibold text-neutral-300">Backpack Only</h4>
+        <div className="hidden overflow-x-auto rounded-lg border border-neutral-800 bg-neutral-900 sm:block">
+          <table className="w-full min-w-[550px] border-collapse text-sm">
+            <thead>
+              <tr className="border-b border-neutral-800 text-left text-xs uppercase tracking-wide text-neutral-500">
+                <th className="px-3 py-2">Unit</th>
+                <th className="px-3 py-2">Class</th>
+                <th className="px-3 py-2">Weapons</th>
+                <th className="px-3 py-2">Skills</th>
+              </tr>
+            </thead>
+            <tbody>{ids.map((id) => renderBackpackRow(id))}</tbody>
+          </table>
+        </div>
+        <div className="space-y-3 sm:hidden">{ids.map((id) => renderBackpackCard(id))}</div>
       </div>
     )
   }
@@ -311,35 +485,37 @@ function TeamViewerPanel() {
         )}
       </div>
 
-      {/* Headless batch rendering: one UnitDetail per roster member with a REAL Unit Set entry
-          (selectedClassId present), computing off-screen and reporting back via onComputedSummary —
-          nothing here duplicates its math. A backpack-only entry (no Unit Set entry, or one created
-          just to carry a backpack pick) deliberately has no selectedClassId and skips this entirely —
-          getOwnStats falls back to a static class-cap computed from Skill Planner's own class pick. */}
+      {/* Headless batch rendering: one UnitDetail per roster member, computing off-screen and
+          reporting back via onComputedSummary — nothing here duplicates its math. Every roster
+          member gets mounted now (not just ones with a real selectedClassId): a backpack-only entry
+          still needs its own availableClasses/classId reported (fed by whatever spouse/friend was
+          set for them, or just their bare Class Set if they've never been touched in Unit Planner at
+          all) so the Backpack Only table's class picker below has real options, not a guess. Passing
+          `{}` when there's no saved entry data at all still resolves a sensible bare-identity default. */}
       {!routeMismatch &&
-        unitSet?.entries
-          .filter((entry) => typeof entry.data.selectedClassId === 'string')
-          .map((entry) => {
-            const character = charactersById[entry.characterId]
-            if (!character) return null
-            return (
-              <UnitDetail
-                key={entry.characterId}
-                character={character}
-                activeRoute={unitSet.route}
-                corrinBuild={corrinBuild}
-                pendingBuildData={entry.data}
-                onConsumePendingBuildData={() => {}}
-                onRequestLoadBuild={() => {}}
-                onSwitchRoute={() => {}}
-                headless
-                onComputedSummary={(summary) => setSummaries((prev) => ({ ...prev, [entry.characterId]: summary }))}
-              />
-            )
-          })}
+        unitSet &&
+        rosterIds.map((id) => {
+          const character = charactersById[id]
+          if (!character) return null
+          const entryData = unitSet.entries.find((e) => e.characterId === id)?.data ?? {}
+          return (
+            <UnitDetail
+              key={id}
+              character={character}
+              activeRoute={unitSet.route}
+              corrinBuild={corrinBuild}
+              pendingBuildData={entryData}
+              onConsumePendingBuildData={() => {}}
+              onRequestLoadBuild={() => {}}
+              onSwitchRoute={() => {}}
+              headless
+              onComputedSummary={(summary) => setSummaries((prev) => ({ ...prev, [id]: summary }))}
+            />
+          )
+        })}
 
       {!routeMismatch && renderTable(mainIds)}
-      {!routeMismatch && renderTable(backpackOnlyIds, 'Backpack Only')}
+      {!routeMismatch && renderBackpackTable(backpackOnlyIds)}
 
       {!routeMismatch && (skillSetId || unitSetId) && rosterIds.length === 0 && (
         <p className="text-sm text-neutral-500">Neither set has any units yet.</p>
